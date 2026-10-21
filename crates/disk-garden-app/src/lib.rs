@@ -1,9 +1,9 @@
 use disk_garden_core::{
-    build_directory_navigation_view, build_entry_detail_view, build_recover_report,
+    build_directory_navigation_view, build_entry_detail_view, build_recover_report, compare_scans,
     extension_distribution, filter_entries, list_system_volumes, raw_bytes_to_path_buf,
-    top_directories, top_files, CancelToken, DiskVolumeInfo, EntryFilter, EntryId, EntrySummary,
-    EntryType, ScanConfig, ScanEvent, ScanHandle, ScanProgress, ScanResult, ScanStatus, SizeMetric,
-    SortField,
+    top_directories, top_files, CancelToken, DiffOptions, DiffSortField, DiskVolumeInfo,
+    EntryFilter, EntryId, EntrySummary, EntryType, ScanConfig, ScanEvent, ScanHandle, ScanProgress,
+    ScanResult, ScanStatus, SizeMetric, SnapshotStore, SortField,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,6 +140,37 @@ pub struct FsDirEntry {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveSnapshotRequest {
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteSnapshotRequest {
+    pub snapshot_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadSnapshotRequest {
+    pub snapshot_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryDiffRequest {
+    pub base_snapshot_id: i64,
+    #[serde(default)]
+    pub target_snapshot_id: Option<i64>,
+    #[serde(default)]
+    pub sort_field: Option<DiffSortField>,
+    #[serde(default)]
+    pub descending: Option<bool>,
+    #[serde(default)]
+    pub metric: Option<SizeMetric>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
 struct ActiveJob {
     job_id: u64,
     root_path: String,
@@ -152,6 +183,7 @@ struct InnerState {
     active_job: Option<ActiveJob>,
     current_scan: Option<Arc<ScanResult>>,
     default_cwd: String,
+    snapshot_store: Option<SnapshotStore>,
 }
 
 /// Thread-safe application state coordinator bridging [`disk_garden_core`] and the UI.
@@ -168,14 +200,38 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let store = SnapshotStore::open_default().ok();
         Self {
             inner: Arc::new(Mutex::new(InnerState {
                 next_job_id: 1,
                 active_job: None,
                 current_scan: None,
                 default_cwd: "/".to_string(),
+                snapshot_store: store,
             })),
         }
+    }
+
+    /// Creates an [`AppState`] backed by an explicit [`SnapshotStore`] (e.g. for isolated tests).
+    pub fn with_snapshot_store(store: SnapshotStore) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InnerState {
+                next_job_id: 1,
+                active_job: None,
+                current_scan: None,
+                default_cwd: "/".to_string(),
+                snapshot_store: Some(store),
+            })),
+        }
+    }
+
+    pub fn snapshot_store(&self) -> Option<SnapshotStore> {
+        self.inner.lock().unwrap().snapshot_store.clone()
+    }
+
+    pub fn set_current_scan(&self, scan: ScanResult) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.current_scan = Some(Arc::new(scan));
     }
 
     /// Starts a new background scan on `config`, cancelling any previous scan in flight.
@@ -658,6 +714,196 @@ fn handle_connection(mut stream: TcpStream, state: &AppState) -> std::io::Result
                     "directory": dir_to_open.to_string_lossy()
                 }),
             )
+        }
+        ("GET", "/api/snapshots") => {
+            let Some(store) = state.snapshot_store() else {
+                return write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": "SnapshotStore SQLite non disponibile." }),
+                );
+            };
+            let root_filter = query
+                .get("root")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from);
+            match store.list_snapshots(root_filter.as_deref()) {
+                Ok(list) => write_json(&mut stream, 200, &list),
+                Err(e) => write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": e.to_string() }),
+                ),
+            }
+        }
+        ("POST", "/api/snapshots/save") => {
+            let Some(store) = state.snapshot_store() else {
+                return write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": "SnapshotStore SQLite non disponibile." }),
+                );
+            };
+            let Some(scan) = state.current_scan() else {
+                return write_json(
+                    &mut stream,
+                    404,
+                    &serde_json::json!({ "error": "Nessuna scansione attiva da salvare come snapshot." }),
+                );
+            };
+            let req: SaveSnapshotRequest = serde_json::from_slice(&body)
+                .unwrap_or(SaveSnapshotRequest { label: None });
+            match store.save_snapshot(
+                &scan,
+                req.label.as_deref(),
+                scan.config.cross_mounts,
+                scan.config.follow_symlinks,
+            ) {
+                Ok(header) => write_json(&mut stream, 200, &header),
+                Err(e) => write_json(
+                    &mut stream,
+                    400,
+                    &serde_json::json!({ "error": e.to_string() }),
+                ),
+            }
+        }
+        ("POST", "/api/snapshots/delete") => {
+            let Some(store) = state.snapshot_store() else {
+                return write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": "SnapshotStore SQLite non disponibile." }),
+                );
+            };
+            let req: DeleteSnapshotRequest = match serde_json::from_slice(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    return write_json(
+                        &mut stream,
+                        400,
+                        &serde_json::json!({ "error": e.to_string() }),
+                    )
+                }
+            };
+            match store.delete_snapshot(req.snapshot_id) {
+                Ok(deleted) => write_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({ "deleted": deleted }),
+                ),
+                Err(e) => write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": e.to_string() }),
+                ),
+            }
+        }
+        ("POST", "/api/snapshots/load") => {
+            let Some(store) = state.snapshot_store() else {
+                return write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": "SnapshotStore SQLite non disponibile." }),
+                );
+            };
+            let req: LoadSnapshotRequest = match serde_json::from_slice(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    return write_json(
+                        &mut stream,
+                        400,
+                        &serde_json::json!({ "error": e.to_string() }),
+                    )
+                }
+            };
+            match store.load_snapshot(req.snapshot_id) {
+                Ok(stored) => {
+                    let ov = ScanOverview::from_result(&stored.scan);
+                    state.set_current_scan(stored.scan);
+                    write_json(&mut stream, 200, &ov)
+                }
+                Err(e) => write_json(
+                    &mut stream,
+                    404,
+                    &serde_json::json!({ "error": e.to_string() }),
+                ),
+            }
+        }
+        ("POST", "/api/history/diff") => {
+            let Some(store) = state.snapshot_store() else {
+                return write_json(
+                    &mut stream,
+                    500,
+                    &serde_json::json!({ "error": "SnapshotStore SQLite non disponibile." }),
+                );
+            };
+            let req: HistoryDiffRequest = match serde_json::from_slice(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    return write_json(
+                        &mut stream,
+                        400,
+                        &serde_json::json!({ "error": e.to_string() }),
+                    )
+                }
+            };
+            let base_stored = match store.load_snapshot(req.base_snapshot_id) {
+                Ok(s) => s,
+                Err(e) => {
+                    return write_json(
+                        &mut stream,
+                        404,
+                        &serde_json::json!({ "error": format!("Snapshot base non trovato: {}", e) }),
+                    )
+                }
+            };
+
+            let (target_scan, target_id, target_label): (Arc<ScanResult>, Option<i64>, Option<String>) =
+                if let Some(tid) = req.target_snapshot_id {
+                    match store.load_snapshot(tid) {
+                        Ok(s) => (Arc::new(s.scan), Some(s.header.id), s.header.label),
+                        Err(e) => {
+                            return write_json(
+                                &mut stream,
+                                404,
+                                &serde_json::json!({ "error": format!("Snapshot target non trovato: {}", e) }),
+                            )
+                        }
+                    }
+                } else if let Some(cur) = state.current_scan() {
+                    (
+                        cur,
+                        None,
+                        Some("Scansione Corrente (Live)".to_string()),
+                    )
+                } else {
+                    return write_json(
+                        &mut stream,
+                        400,
+                        &serde_json::json!({ "error": "Seleziona uno snapshot target oppure esegui prima una scansione corrente." }),
+                    );
+                };
+
+            let opts = DiffOptions {
+                sort_field: req.sort_field.unwrap_or(DiffSortField::SignedDelta),
+                descending: req.descending.unwrap_or(true),
+                metric: req.metric.unwrap_or(SizeMetric::Allocated),
+                max_items_per_category: req.limit.unwrap_or(300),
+                base_snapshot_id: Some(base_stored.header.id),
+                target_snapshot_id: target_id,
+                base_label: base_stored.header.label,
+                target_label,
+            };
+
+            match compare_scans(&base_stored.scan, &target_scan, &opts) {
+                Ok(report) => write_json(&mut stream, 200, &report),
+                Err(e) => write_json(
+                    &mut stream,
+                    400,
+                    &serde_json::json!({ "error": e.to_string() }),
+                ),
+            }
         }
         _ => write_json(
             &mut stream,

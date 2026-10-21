@@ -1,5 +1,6 @@
 use disk_garden_core::{
-    build_treemap_view, top_directories, top_files, ScanConfig, ScanHandle, SizeMetric,
+    build_treemap_view, compare_scans, top_directories, top_files, DiffOptions, ScanConfig,
+    ScanHandle, SizeMetric, SnapshotStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -23,14 +24,17 @@ fn format_bytes(bytes: u64) -> String {
 
 fn print_usage() {
     eprintln!(
-        "Uso: disk-garden-cli <PERCORSO_DIRECTORY> [OPZIONI]\n\
+        "Uso: disk-garden-cli [PERCORSO_DIRECTORY] [OPZIONI]\n\
          \n\
          Opzioni:\n\
-         \x20 --apparent          Ordina per dimensione apparente (st_size) invece che allocata (st_blocks)\n\
-         \x20 --top <N>           Numero di file e directory più grandi da mostrare (default: 10)\n\
-         \x20 --follow-symlinks   Segue i link simbolici (con protezione anti-ciclo)\n\
-         \x20 --cross-mounts      Attraversa mount point e filesystem differenti\n\
-         \x20 --json              Emette il riepilogo strutturato in formato JSON\n"
+         \x20 --apparent                 Ordina per dimensione apparente (st_size) invece che allocata (st_blocks)\n\
+         \x20 --top <N>                  Numero di file e directory più grandi da mostrare (default: 10)\n\
+         \x20 --follow-symlinks          Segue i link simbolici (con protezione anti-ciclo)\n\
+         \x20 --cross-mounts             Attraversa mount point e filesystem differenti\n\
+         \x20 --save-snapshot [LABEL]    Salva la scansione come snapshot nel database SQLite locale\n\
+         \x20 --list-snapshots           Elenca gli snapshot salvati nel database SQLite locale\n\
+         \x20 --diff <BASE_ID> <TGT_ID>  Confronta due snapshot salvati tramite DiffEngine\n\
+         \x20 --json                     Emette il riepilogo strutturato in formato JSON\n"
     );
 }
 
@@ -47,6 +51,10 @@ fn main() {
     let mut follow_symlinks = false;
     let mut cross_mounts = false;
     let mut json_output = false;
+    let mut save_snapshot = false;
+    let mut snapshot_label: Option<String> = None;
+    let mut list_snapshots = false;
+    let mut diff_ids: Option<(i64, i64)> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -55,6 +63,24 @@ fn main() {
             "--follow-symlinks" => follow_symlinks = true,
             "--cross-mounts" => cross_mounts = true,
             "--json" => json_output = true,
+            "--list-snapshots" => list_snapshots = true,
+            "--save-snapshot" => {
+                save_snapshot = true;
+                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    i += 1;
+                    snapshot_label = Some(args[i].clone());
+                }
+            }
+            "--diff" => {
+                if i + 2 >= args.len() {
+                    eprintln!("Errore: --diff richiede <BASE_ID> <TARGET_ID>");
+                    process::exit(1);
+                }
+                let b: i64 = args[i + 1].parse().unwrap_or(0);
+                let t: i64 = args[i + 2].parse().unwrap_or(0);
+                diff_ids = Some((b, t));
+                i += 2;
+            }
             "--top" => {
                 i += 1;
                 if i >= args.len() {
@@ -73,6 +99,90 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if list_snapshots {
+        let store = SnapshotStore::open_default().unwrap_or_else(|e| {
+            eprintln!("Errore apertura SnapshotStore SQLite: {}", e);
+            process::exit(1);
+        });
+        let snaps = store.list_snapshots(root_path.as_deref()).unwrap_or_else(|e| {
+            eprintln!("Errore lettura snapshot: {}", e);
+            process::exit(1);
+        });
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&snaps).unwrap());
+        } else {
+            println!("=== DiskGarden CLI — Snapshot Salvati ({}) ===", snaps.len());
+            for s in snaps {
+                println!(
+                    " #{:<4} | {:<32} | {:<10} | Alloc: {:>16} | {} file, {} dir | {:?}",
+                    s.id,
+                    s.root_path_display,
+                    s.label.as_deref().unwrap_or("-"),
+                    format_bytes(s.total_allocated_bytes),
+                    s.total_files_count,
+                    s.total_dirs_count,
+                    s.status
+                );
+            }
+        }
+        return;
+    }
+
+    if let Some((base_id, target_id)) = diff_ids {
+        let store = SnapshotStore::open_default().unwrap_or_else(|e| {
+            eprintln!("Errore apertura SnapshotStore SQLite: {}", e);
+            process::exit(1);
+        });
+        let b = store.load_snapshot(base_id).unwrap_or_else(|e| {
+            eprintln!("Errore caricamento snapshot base #{}: {}", base_id, e);
+            process::exit(1);
+        });
+        let t = store.load_snapshot(target_id).unwrap_or_else(|e| {
+            eprintln!("Errore caricamento snapshot target #{}: {}", target_id, e);
+            process::exit(1);
+        });
+        let opts = DiffOptions {
+            metric,
+            max_items_per_category: top_n,
+            base_snapshot_id: Some(b.header.id),
+            target_snapshot_id: Some(t.header.id),
+            base_label: b.header.label,
+            target_label: t.header.label,
+            ..Default::default()
+        };
+
+        let rep = compare_scans(&b.scan, &t.scan, &opts).unwrap_or_else(|e| {
+            eprintln!("Errore confronto snapshot: {}", e);
+            process::exit(1);
+        });
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        } else {
+            println!("=== DiskGarden CLI — Confronto Snapshot (#{} -> #{}) ===", base_id, target_id);
+            println!("Radice:           {}", rep.root_path_display);
+            println!("Base Allocato:    {}", format_bytes(rep.base_total_allocated_bytes));
+            println!("Target Allocato:  {}", format_bytes(rep.target_total_allocated_bytes));
+            println!("Delta Allocato:   {:+} B", rep.net_allocated_delta_bytes);
+            println!("Delta File:       {:+}", rep.net_files_delta_count);
+            println!("\n--- Top Directory in Variazione ---");
+            for d in &rep.directory_deltas {
+                println!(
+                    " {:<40} | {:?} | {:+} B alloc ({:+} B app)",
+                    d.rel_path_display, d.change_kind, d.delta_allocated_bytes, d.delta_apparent_bytes
+                );
+            }
+            println!(
+                "\nFile aggiunti: {} | rimossi: {} | ridimensionati: {} | modificati senza cambio dim.: {} | non confrontabili: {}",
+                rep.added_files.len(),
+                rep.removed_files.len(),
+                rep.resized_files.len(),
+                rep.metadata_only_modified_files.len(),
+                rep.unreliable_paths.len()
+            );
+        }
+        return;
     }
 
     let Some(root) = root_path else {
@@ -94,6 +204,29 @@ fn main() {
         eprintln!("Errore: il worker di scansione si è interrotto inaspettatamente.");
         process::exit(2);
     };
+
+    if save_snapshot {
+        match SnapshotStore::open_default().and_then(|st| {
+            st.save_snapshot(
+                &scan,
+                snapshot_label.as_deref(),
+                cross_mounts,
+                follow_symlinks,
+            )
+        }) {
+            Ok(hdr) => {
+                if !json_output {
+                    println!(
+                        "Snapshot #{} salvato con successo nel database SQLite locale.",
+                        hdr.id
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Avviso: impossibile salvare lo snapshot: {}", e);
+            }
+        }
+    }
 
     if json_output {
         let top_f: Vec<_> = top_files(&scan, top_n, metric, false)

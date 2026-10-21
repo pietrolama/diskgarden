@@ -1,9 +1,11 @@
 use disk_garden_app::{
-    AppServer, AppState, AppStateResponse, BucketItemsRequest, FsDirListing, SearchRequest,
-    SearchResponse, StartScanRequest,
+    AppServer, AppState, AppStateResponse, BucketItemsRequest, DeleteSnapshotRequest, FsDirListing,
+    HistoryDiffRequest, LoadSnapshotRequest, SaveSnapshotRequest, SearchRequest, SearchResponse,
+    StartScanRequest,
 };
 use disk_garden_core::{
-    DirectoryNavigationView, EntryDetailView, EntryType, RecoverReport, ScanStatus, SortField,
+     DiffReport, DiffSortField, DirectoryNavigationView, EntryDetailView, EntryType, RecoverReport,
+    ScanStatus, SizeMetric, SnapshotHeader, SnapshotStore, SortField,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -239,6 +241,137 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
         cache_cand.qualification.detected_allocated_bytes
     );
     assert!(cache_cand.qualification.verified_recoverable_bytes > 0);
+}
+
+#[test]
+fn test_milestone_3_history_snapshots_and_diff_api() {
+    let tmp = TempDir::new().expect("create tempdir");
+    let db_path = tmp.path().join("ui_snapshots.db");
+    let store = SnapshotStore::open(&db_path).expect("open sqlite store");
+
+    let root = tmp.path().join("monitored_root");
+    fs::create_dir_all(root.join("logs")).unwrap();
+    fs::create_dir_all(root.join("data")).unwrap();
+    write_file(&root.join("logs/server.log"), 10_000);
+    write_file(&root.join("data/old.db"), 30_000);
+
+    let state = AppState::with_snapshot_store(store);
+    let server = AppServer::start(0, state).expect("start local app server");
+    let addr = server.addr();
+
+    // 1. Run baseline scan T0
+    let _: serde_json::Value = http_post_json(
+        addr,
+        "/api/scan/start",
+        &StartScanRequest {
+            root_path: root.to_string_lossy().into_owned(),
+            follow_symlinks: false,
+            cross_mounts: false,
+        },
+    );
+    for _ in 0..100 {
+        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        if !st.is_scanning && st.scan_overview.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // 2. Save baseline snapshot via `POST /api/snapshots/save`
+    let snap_t0: SnapshotHeader = http_post_json(
+        addr,
+        "/api/snapshots/save",
+        &SaveSnapshotRequest {
+            label: Some("Baseline T0".to_string()),
+        },
+    );
+    assert_eq!(snap_t0.label.as_deref(), Some("Baseline T0"));
+    assert_eq!(snap_t0.total_apparent_bytes, 40_000);
+
+    // 3. Mutate directory: grow `logs/server.log` (+50_000 B), remove `data/old.db` (-30_000 B), add `data/new.parquet` (+70_000 B)
+    write_file(&root.join("logs/server.log"), 60_000);
+    fs::remove_file(root.join("data/old.db")).unwrap();
+    write_file(&root.join("data/new.parquet"), 70_000);
+
+    // 4. Run scan T1
+    let _: serde_json::Value = http_post_json(
+        addr,
+        "/api/scan/start",
+        &StartScanRequest {
+            root_path: root.to_string_lossy().into_owned(),
+            follow_symlinks: false,
+            cross_mounts: false,
+        },
+    );
+    for _ in 0..100 {
+        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        if !st.is_scanning
+            && st
+                .scan_overview
+                .as_ref()
+                .map(|o| o.total_apparent_bytes == 130_000)
+                .unwrap_or(false)
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // 5. Compare saved `snap_t0` against live current scan (`target_snapshot_id: None`)
+    let diff: DiffReport = http_post_json(
+        addr,
+        "/api/history/diff",
+        &HistoryDiffRequest {
+            base_snapshot_id: snap_t0.id,
+            target_snapshot_id: None,
+            sort_field: Some(DiffSortField::SignedDelta),
+            descending: Some(true),
+            metric: Some(SizeMetric::Apparent),
+            limit: Some(50),
+        },
+    );
+    assert_eq!(diff.base_total_apparent_bytes, 40_000);
+    assert_eq!(diff.target_total_apparent_bytes, 130_000);
+    assert_eq!(diff.net_apparent_delta_bytes, 90_000);
+    assert_eq!(diff.added_files.len(), 1);
+    assert_eq!(diff.added_files[0].rel_path_display, "data/new.parquet");
+    assert_eq!(diff.removed_files.len(), 1);
+    assert_eq!(diff.removed_files[0].rel_path_display, "data/old.db");
+    assert_eq!(diff.resized_files.len(), 1);
+    assert_eq!(diff.resized_files[0].rel_path_display, "logs/server.log");
+    assert_eq!(diff.resized_files[0].delta_apparent_bytes, 50_000);
+
+    // 6. Save second snapshot T1, list snapshots, load T0 back into Explore, and delete T0
+    let snap_t1: SnapshotHeader = http_post_json(
+        addr,
+        "/api/snapshots/save",
+        &SaveSnapshotRequest {
+            label: Some("After Growth T1".to_string()),
+        },
+    );
+    let listed: Vec<SnapshotHeader> = http_get_json(addr, "/api/snapshots");
+    assert_eq!(listed.len(), 2);
+
+    let loaded_ov: serde_json::Value = http_post_json(
+        addr,
+        "/api/snapshots/load",
+        &LoadSnapshotRequest {
+            snapshot_id: snap_t0.id,
+        },
+    );
+    assert_eq!(loaded_ov["total_apparent_bytes"], 40_000);
+
+    let del_res: serde_json::Value = http_post_json(
+        addr,
+        "/api/snapshots/delete",
+        &DeleteSnapshotRequest {
+            snapshot_id: snap_t0.id,
+        },
+    );
+    assert_eq!(del_res["deleted"], true);
+    let remaining: Vec<SnapshotHeader> = http_get_json(addr, "/api/snapshots");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, snap_t1.id);
 }
 
 fn write_file(path: &Path, size: usize) {

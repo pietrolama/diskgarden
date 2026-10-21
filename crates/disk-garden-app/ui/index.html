@@ -657,6 +657,9 @@
     </nav>
 
     <div style="display:flex; gap:6px; align-items:center;">
+      <button class="btn" id="btn-quick-save-snap" onclick="quickSaveSnapshotFromHeader()" title="Salva la scansione corrente come snapshot SQLite per il confronto nel tempo">
+        💾 Salva Snapshot
+      </button>
       <button class="btn" id="btn-metric" onclick="toggleSizeMetric()" title="Commuta tra spazio fisico allocato (st_blocks) e spazio logico apparente (st_size)">
         Metrica: Allocata
       </button>
@@ -803,14 +806,95 @@
         </div>
       </section>
 
-      <!-- MODALITÀ 3: HISTORY (Placeholder strutturato per Milestone 3) -->
+      <!-- MODALITÀ 3: HISTORY (SnapshotStore SQLite + DiffEngine) -->
       <section id="pane-history" class="hidden" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
-        <div style="background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:8px; padding:24px; text-align:center; margin:auto; max-width:560px;">
-          <span class="badge badge-special">Milestone 3 — SnapshotStore & DiffEngine</span>
-          <h3 style="margin-top:10px; font-size:16px;">Memoria Temporale e Confronto Snapshot</h3>
-          <p style="margin-top:8px; color:var(--text-secondary); font-size:13px;">
-            La persistenza locale su SQLite (<code>SnapshotStore</code>) e il motore di confronto tra due scansioni (<code>DiffEngine</code>) costituiscono la <strong>Milestone 3</strong> della roadmap esecutiva.
-          </p>
+        <!-- Barra Salvataggio & Selezione Snapshot per il Confronto -->
+        <div style="background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; gap:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+              <h3 style="font-size:14.5px;">History — Evoluzione dello Spazio e Confronto Snapshot (SQLite)</h3>
+              <p style="font-size:11.5px; color:var(--text-secondary);">
+                Salva la fotografia corrente come snapshot locale e confrontala con una scansione successiva della stessa radice per individuare dove cresce il disco.
+              </p>
+            </div>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <input
+                type="text"
+                id="snap-label-input"
+                class="text-input"
+                style="width:210px;"
+                placeholder="Etichetta opzionale (es. Pre-build)"
+              />
+              <button class="btn btn-primary" onclick="saveCurrentScanSnapshot()">💾 Salva Scansione Corrente</button>
+              <span id="snap-save-feedback" style="font-size:11.5px; color:var(--accent);"></span>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-top:1px solid var(--border-subtle); padding-top:9px;">
+            <label style="font-size:12px; color:var(--text-secondary); font-weight:600;">Base (Passato):</label>
+            <select id="hist-base-select" class="select-input" style="min-width:250px;" onchange="runHistoryDiff()"></select>
+
+            <label style="font-size:12px; color:var(--text-secondary); font-weight:600;">Target (Confronto):</label>
+            <select id="hist-target-select" class="select-input" style="min-width:250px;" onchange="runHistoryDiff()"></select>
+
+            <label style="font-size:12px; color:var(--text-secondary); font-weight:600;">Ordina per:</label>
+            <select id="hist-sort-field" class="select-input" onchange="runHistoryDiff()">
+              <option value="signed_delta">Crescita con segno (+Δ)</option>
+              <option value="absolute_delta">Variazione assoluta (|Δ|)</option>
+              <option value="current_size">Dimensione attuale</option>
+              <option value="relative_path">Percorso relativo</option>
+            </select>
+            <button class="btn" id="btn-hist-sort-dir" onclick="toggleHistorySortDir()">↓ Desc</button>
+            <button class="btn" onclick="runHistoryDiff()">Confronta</button>
+          </div>
+        </div>
+
+        <!-- Riepilogo KPI del Confronto -->
+        <div id="hist-summary-strip" class="hidden" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:8px;">
+          <div class="metric-card">
+            <div class="lbl" id="hist-kpi-base-lbl">Scansione Base</div>
+            <div class="val" id="hist-kpi-base-val">—</div>
+            <div class="sub" id="hist-kpi-base-time">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="lbl" id="hist-kpi-target-lbl">Scansione Target</div>
+            <div class="val" id="hist-kpi-target-val">—</div>
+            <div class="sub" id="hist-kpi-target-time">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="lbl">Variazione Netta Spazio</div>
+            <div class="val" id="hist-kpi-delta-val">—</div>
+            <div class="sub" id="hist-kpi-delta-sub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="lbl">Variazione Conteggi</div>
+            <div class="val" id="hist-kpi-counts-val">—</div>
+            <div class="sub" id="hist-kpi-counts-sub">—</div>
+          </div>
+        </div>
+
+        <!-- Banner Avvisi di Compatibilità / Metodologia -->
+        <div id="hist-warnings-box" class="hidden" style="background:var(--warn-bg); border:1px solid var(--warn); color:var(--warn); border-radius:7px; padding:7px 12px; font-size:12px;"></div>
+
+        <!-- Tab Categorie Risultati Diff + Gestione Snapshot Salvati -->
+        <div class="filter-bar">
+          <div class="chip-group">
+            <button class="chip active" id="htab-dirs" onclick="setHistoryCategory('dirs')">Directory in Crescita / Var.</button>
+            <button class="chip" id="htab-resized" onclick="setHistoryCategory('resized')">File Ridimensionati (Δ ≠ 0)</button>
+            <button class="chip" id="htab-added" onclick="setHistoryCategory('added')">File Aggiunti</button>
+            <button class="chip" id="htab-removed" onclick="setHistoryCategory('removed')">File Rimossi</button>
+            <button class="chip" id="htab-meta" onclick="setHistoryCategory('meta')">Modificati senza cambio dim. (Δ = 0)</button>
+            <button class="chip" id="htab-unreliable" onclick="setHistoryCategory('unreliable')">Non Confrontabili con Certezza</button>
+            <button class="chip" id="htab-snapshots" onclick="setHistoryCategory('snapshots')">Archivio Snapshot Salvati</button>
+          </div>
+        </div>
+
+        <!-- Tabella Risultati History -->
+        <div class="table-container">
+          <table class="entries-table" aria-label="Risultati confronto storico">
+            <thead id="history-thead"></thead>
+            <tbody id="history-tbody"></tbody>
+          </table>
         </div>
       </section>
     </main>
@@ -924,7 +1008,11 @@
       sortDesc: true,
       extensionStats: [],
       activeBucketTile: null,
-      modalParentPath: null
+      modalParentPath: null,
+      snapshots: [],
+      diffReport: null,
+      historyCategory: "dirs",
+      historySortDesc: true
     };
 
     let pollTimer = null;
@@ -1791,6 +1879,9 @@
       if (!document.getElementById("pane-recover").classList.contains("hidden")) {
         await loadRecoverView();
       }
+      if (!document.getElementById("pane-history").classList.contains("hidden")) {
+        await runHistoryDiff();
+      }
     }
 
     function setVizMode(mode) {
@@ -1808,9 +1899,419 @@
       });
       if (mode === "recover") {
         await loadRecoverView();
+      } else if (mode === "history") {
+        await loadHistoryView();
       } else if (mode === "explore") {
         renderVisualization();
       }
+    }
+
+    function formatUnixMs(ms) {
+      if (!ms) return "N/D";
+      try {
+        const d = new Date(ms);
+        return d.toISOString().replace("T", " ").slice(0, 19);
+      } catch (_) {
+        return "N/D";
+      }
+    }
+
+    function formatSignedBytes(delta) {
+      if (delta === 0) return "0 B";
+      const sign = delta > 0 ? "+" : "-";
+      return sign + formatBytes(Math.abs(delta));
+    }
+
+    async function quickSaveSnapshotFromHeader() {
+      await switchMode("history");
+      await saveCurrentScanSnapshot();
+    }
+
+    async function saveCurrentScanSnapshot() {
+      const fb = document.getElementById("snap-save-feedback");
+      try {
+        const label = document.getElementById("snap-label-input").value.trim() || null;
+        const header = await apiPost("/api/snapshots/save", { label });
+        document.getElementById("snap-label-input").value = "";
+        fb.style.color = "var(--ok)";
+        fb.textContent = `Snapshot #${header.id} salvato (${formatBytes(header.total_allocated_bytes)})`;
+        await loadHistoryView();
+      } catch (e) {
+        fb.style.color = "var(--danger)";
+        fb.textContent = "Errore salvataggio: " + e.message;
+      }
+    }
+
+    async function loadHistoryView() {
+      try {
+        const snaps = await apiGet("/api/snapshots");
+        appState.snapshots = snaps || [];
+        populateHistorySelectors();
+        if (appState.snapshots.length > 0) {
+          await runHistoryDiff();
+        } else {
+          appState.diffReport = null;
+          document.getElementById("hist-summary-strip").classList.add("hidden");
+          renderHistoryCategoryTable();
+        }
+      } catch (e) {
+        console.error("History load error:", e);
+      }
+    }
+
+    function populateHistorySelectors() {
+      const baseSel = document.getElementById("hist-base-select");
+      const targetSel = document.getElementById("hist-target-select");
+      const prevBase = baseSel.value;
+      const prevTarget = targetSel.value;
+
+      baseSel.innerHTML = "";
+      targetSel.innerHTML = "";
+
+      const curRoot = appState.scanOverview ? appState.scanOverview.root_path_display : null;
+      const compatibleSnaps = curRoot
+        ? appState.snapshots.filter(s => s.root_path_display === curRoot)
+        : appState.snapshots;
+      const listToUse = compatibleSnaps.length > 0 ? compatibleSnaps : appState.snapshots;
+
+      if (appState.scanOverview && (appState.scanOverview.status === "completed" || appState.scanOverview.status === "partial")) {
+        const optLive = document.createElement("option");
+        optLive.value = "live";
+        optLive.textContent = `🟢 Scansione Corrente (${appState.scanOverview.root_path_display} — ${formatBytes(appState.scanOverview.total_allocated_bytes)})`;
+        targetSel.appendChild(optLive);
+      }
+
+      listToUse.forEach(s => {
+        const lbl = s.label ? `[${s.label}] ` : "";
+        const txt = `#${s.id} ${lbl}${s.root_path_display} — ${formatUnixMs(s.created_at_unix_ms)} (${formatBytes(s.total_allocated_bytes)})`;
+        const ob = document.createElement("option");
+        ob.value = String(s.id);
+        ob.textContent = txt;
+        baseSel.appendChild(ob);
+
+        const ot = document.createElement("option");
+        ot.value = String(s.id);
+        ot.textContent = txt;
+        targetSel.appendChild(ot);
+      });
+
+      if (prevBase && Array.from(baseSel.options).some(o => o.value === prevBase)) {
+        baseSel.value = prevBase;
+      } else if (listToUse.length >= 2 && targetSel.value !== "live") {
+        baseSel.value = String(listToUse[1].id);
+      } else if (listToUse.length >= 1) {
+        baseSel.value = String(listToUse[0].id);
+      }
+
+      if (prevTarget && Array.from(targetSel.options).some(o => o.value === prevTarget)) {
+        targetSel.value = prevTarget;
+      }
+    }
+
+    async function toggleHistorySortDir() {
+      appState.historySortDesc = !appState.historySortDesc;
+      document.getElementById("btn-hist-sort-dir").textContent = appState.historySortDesc ? "↓ Desc" : "↑ Asc";
+      await runHistoryDiff();
+    }
+
+    function setHistoryCategory(cat) {
+      appState.historyCategory = cat;
+      const map = {
+        dirs: "htab-dirs",
+        resized: "htab-resized",
+        added: "htab-added",
+        removed: "htab-removed",
+        meta: "htab-meta",
+        unreliable: "htab-unreliable",
+        snapshots: "htab-snapshots"
+      };
+      Object.entries(map).forEach(([k, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle("active", k === cat);
+      });
+      renderHistoryCategoryTable();
+    }
+
+    async function runHistoryDiff() {
+      const baseVal = document.getElementById("hist-base-select").value;
+      const targetVal = document.getElementById("hist-target-select").value;
+      if (!baseVal) {
+        appState.diffReport = null;
+        renderHistoryCategoryTable();
+        return;
+      }
+
+      const sortField = document.getElementById("hist-sort-field").value;
+      const payload = {
+        base_snapshot_id: Number(baseVal),
+        target_snapshot_id: (!targetVal || targetVal === "live") ? null : Number(targetVal),
+        sort_field: sortField,
+        descending: appState.historySortDesc,
+        metric: appState.metric,
+        limit: 300
+      };
+
+      const warnBox = document.getElementById("hist-warnings-box");
+      try {
+        const rep = await apiPost("/api/history/diff", payload);
+        appState.diffReport = rep;
+        renderHistorySummaryKpis(rep);
+        updateHistoryTabCounts(rep);
+
+        const warnings = [...(rep.compatibility_warnings || [])];
+        if (rep.methodology_note) {
+          warnings.push(rep.methodology_note);
+        }
+        warnBox.classList.remove("hidden");
+        warnBox.textContent = warnings.join(" • ");
+        renderHistoryCategoryTable();
+      } catch (e) {
+        appState.diffReport = null;
+        document.getElementById("hist-summary-strip").classList.add("hidden");
+        warnBox.classList.remove("hidden");
+        warnBox.textContent = "Confronto non disponibile: " + e.message;
+        renderHistoryCategoryTable();
+      }
+    }
+
+    function renderHistorySummaryKpis(rep) {
+      const strip = document.getElementById("hist-summary-strip");
+      strip.classList.remove("hidden");
+      const isApp = appState.metric === "apparent";
+      const baseBytes = isApp ? rep.base_total_apparent_bytes : rep.base_total_allocated_bytes;
+      const targetBytes = isApp ? rep.target_total_apparent_bytes : rep.target_total_allocated_bytes;
+      const deltaBytes = isApp ? rep.net_apparent_delta_bytes : rep.net_allocated_delta_bytes;
+
+      document.getElementById("hist-kpi-base-lbl").textContent =
+        `Base #${rep.base_snapshot_id || "—"} ${rep.base_label ? "(" + rep.base_label + ")" : ""}`;
+      document.getElementById("hist-kpi-base-val").textContent = formatBytes(baseBytes);
+      document.getElementById("hist-kpi-base-time").textContent =
+        `${formatUnixMs(rep.base_created_at_unix_ms)} • Stato: ${rep.base_status}`;
+
+      document.getElementById("hist-kpi-target-lbl").textContent =
+        rep.target_snapshot_id ? `Target #${rep.target_snapshot_id} ${rep.target_label ? "(" + rep.target_label + ")" : ""}` : "Target: Scansione Corrente";
+      document.getElementById("hist-kpi-target-val").textContent = formatBytes(targetBytes);
+      document.getElementById("hist-kpi-target-time").textContent =
+        `${formatUnixMs(rep.target_created_at_unix_ms)} • Stato: ${rep.target_status}`;
+
+      const deltaEl = document.getElementById("hist-kpi-delta-val");
+      deltaEl.textContent = formatSignedBytes(deltaBytes);
+      deltaEl.style.color = deltaBytes > 0 ? "var(--danger)" : (deltaBytes < 0 ? "var(--ok)" : "var(--text-primary)");
+      document.getElementById("hist-kpi-delta-sub").textContent =
+        `Allocato: ${formatSignedBytes(rep.net_allocated_delta_bytes)} | Apparente: ${formatSignedBytes(rep.net_apparent_delta_bytes)}`;
+
+      const fDelta = rep.net_files_delta_count;
+      const dDelta = rep.net_dirs_delta_count;
+      document.getElementById("hist-kpi-counts-val").textContent =
+        `${fDelta >= 0 ? "+" : ""}${fDelta} file, ${dDelta >= 0 ? "+" : ""}${dDelta} dir`;
+      document.getElementById("hist-kpi-counts-sub").textContent =
+        `Totale attuale: ${rep.target_total_files_count} file, ${rep.target_total_dirs_count} dir`;
+    }
+
+    function updateHistoryTabCounts(rep) {
+      document.getElementById("htab-dirs").textContent = `Directory in Var. (${(rep.directory_deltas || []).length})`;
+      document.getElementById("htab-resized").textContent = `File Ridimensionati (${(rep.resized_files || []).length})`;
+      document.getElementById("htab-added").textContent = `File Aggiunti (${(rep.added_files || []).length})`;
+      document.getElementById("htab-removed").textContent = `File Rimossi (${(rep.removed_files || []).length})`;
+      document.getElementById("htab-meta").textContent = `Modificati Δ=0 B (${(rep.metadata_only_modified_files || []).length})`;
+      document.getElementById("htab-unreliable").textContent = `Non Confrontabili (${(rep.unreliable_paths || []).length})`;
+      document.getElementById("htab-snapshots").textContent = `Archivio Snapshot (${appState.snapshots.length})`;
+    }
+
+    function renderHistoryCategoryTable() {
+      const thead = document.getElementById("history-thead");
+      const tbody = document.getElementById("history-tbody");
+      thead.innerHTML = "";
+      tbody.innerHTML = "";
+
+      if (appState.historyCategory === "snapshots") {
+        thead.innerHTML = `
+          <tr>
+            <th>ID</th>
+            <th>Data e Ora</th>
+            <th>Radice Analizzata</th>
+            <th>Etichetta</th>
+            <th>Stato</th>
+            <th>Spazio Allocato</th>
+            <th>File / Dir</th>
+            <th>Azioni</th>
+          </tr>
+        `;
+        if (appState.snapshots.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:22px; color:var(--text-secondary);">Nessuno snapshot salvato. Premi "💾 Salva Scansione Corrente" per registrare il primo punto di riferimento.</td></tr>`;
+          return;
+        }
+        appState.snapshots.forEach(s => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono">#${s.id}</td>
+            <td class="mono">${formatUnixMs(s.created_at_unix_ms)}</td>
+            <td class="mono">${escapeHtml(s.root_path_display)}</td>
+            <td>${s.label ? `<span class="badge badge-special">${escapeHtml(s.label)}</span>` : "—"}</td>
+            <td><span class="badge ${s.status === "completed" ? "badge-ok" : "badge-warn"}">${s.status}</span></td>
+            <td class="mono">${formatBytes(s.total_allocated_bytes)}</td>
+            <td class="mono">${s.total_files_count} file, ${s.total_dirs_count} dir</td>
+            <td style="display:flex; gap:5px;">
+              <button class="btn" style="padding:2px 7px; font-size:11px;" onclick="loadSnapshotIntoExplore(${s.id})">Carica in Explore</button>
+              <button class="btn btn-danger" style="padding:2px 7px; font-size:11px;" onclick="deleteSavedSnapshot(${s.id})">Elimina</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+        return;
+      }
+
+      const rep = appState.diffReport;
+      if (!rep) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-secondary);">Salva almeno uno snapshot della directory corrente per confrontare l'evoluzione dello spazio nel tempo.</td></tr>`;
+        return;
+      }
+
+      if (appState.historyCategory === "dirs") {
+        thead.innerHTML = `
+          <tr>
+            <th>Directory (Percorso Relativo)</th>
+            <th>Stato</th>
+            <th>Spazio Base</th>
+            <th>Spazio Target</th>
+            <th>Variazione (Δ Allocato / Apparente)</th>
+            <th>Δ File</th>
+          </tr>
+        `;
+        const items = rep.directory_deltas || [];
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessuna variazione di dimensione rilevata nelle directory tra le due scansioni.</td></tr>`;
+          return;
+        }
+        items.forEach(d => {
+          const tr = document.createElement("tr");
+          const badgeCls = d.delta_allocated_bytes > 0 ? "badge-danger" : (d.delta_allocated_bytes < 0 ? "badge-ok" : "badge-special");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">📁 ${escapeHtml(d.rel_path_display)}</td>
+            <td><span class="badge ${badgeCls}">${escapeHtml(d.change_kind)}</span></td>
+            <td class="mono">${formatBytes(d.base_allocated_bytes)}</td>
+            <td class="mono">${formatBytes(d.target_allocated_bytes)}</td>
+            <td class="mono" style="font-weight:700; color:${d.delta_allocated_bytes > 0 ? "var(--danger)" : "var(--ok)"};">
+              ${formatSignedBytes(d.delta_allocated_bytes)} <span style="font-weight:400; color:var(--text-secondary);">(${formatSignedBytes(d.delta_apparent_bytes)} app.)</span>
+            </td>
+            <td class="mono">${d.delta_files_count >= 0 ? "+" : ""}${d.delta_files_count}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } else if (appState.historyCategory === "resized") {
+        thead.innerHTML = `
+          <tr>
+            <th>File Esistente (Percorso Relativo)</th>
+            <th>Dim. Base</th>
+            <th>Dim. Target</th>
+            <th>Variazione (Δ Allocato / Apparente)</th>
+            <th>Identità Inode</th>
+          </tr>
+        `;
+        const items = rep.resized_files || [];
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessun file esistente ha cambiato dimensione tra le due scansioni.</td></tr>`;
+          return;
+        }
+        items.forEach(f => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">📄 ${escapeHtml(f.rel_path_display)}</td>
+            <td class="mono">${formatBytes(f.base_allocated_bytes)} (${formatBytes(f.base_apparent_bytes)} app.)</td>
+            <td class="mono">${formatBytes(f.target_allocated_bytes)} (${formatBytes(f.target_apparent_bytes)} app.)</td>
+            <td class="mono" style="font-weight:700; color:${f.delta_apparent_bytes > 0 ? "var(--danger)" : "var(--ok)"};">
+              ${formatSignedBytes(f.delta_allocated_bytes)} (${formatSignedBytes(f.delta_apparent_bytes)} app.)
+            </td>
+            <td>${f.replaced_inode ? `<span class="badge badge-warn">Inode sostituito</span>` : `<span class="badge badge-ok">Stesso inode</span>`}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } else if (appState.historyCategory === "added" || appState.historyCategory === "removed") {
+        const isAdded = appState.historyCategory === "added";
+        const items = isAdded ? (rep.added_files || []) : (rep.removed_files || []);
+        thead.innerHTML = `
+          <tr>
+            <th>File ${isAdded ? "Aggiunto" : "Rimosso"}</th>
+            <th>Dim. Allocata</th>
+            <th>Dim. Apparente</th>
+            <th>Impatto Netto</th>
+            <th>Ultima Modifica</th>
+          </tr>
+        `;
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessun file ${isAdded ? "aggiunto" : "rimosso"} rilevato.</td></tr>`;
+          return;
+        }
+        items.forEach(f => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">📄 ${escapeHtml(f.rel_path_display)}</td>
+            <td class="mono">${formatBytes(f.allocated_bytes)}</td>
+            <td class="mono">${formatBytes(f.apparent_bytes)}</td>
+            <td class="mono" style="font-weight:700; color:${isAdded ? "var(--danger)" : "var(--ok)"};">${formatSignedBytes(f.delta_allocated_bytes)}</td>
+            <td class="mono">${formatTimestamp(f.mtime_sec)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } else if (appState.historyCategory === "meta") {
+        thead.innerHTML = `
+          <tr>
+            <th>Percorso Relativo</th>
+            <th>Dimensione (Invariata Δ = 0 B)</th>
+            <th>Timestamp Base → Target</th>
+            <th>Nota Tecnica (Distinto da crescita spaziale)</th>
+          </tr>
+        `;
+        const items = rep.metadata_only_modified_files || [];
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessun file con metadati modificati a parità di dimensione.</td></tr>`;
+          return;
+        }
+        items.forEach(m => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">📄 ${escapeHtml(m.rel_path_display)}</td>
+            <td class="mono">${formatBytes(m.allocated_bytes)} (${formatBytes(m.apparent_bytes)} app.)</td>
+            <td class="mono">${formatTimestamp(m.base_mtime_sec)} → ${formatTimestamp(m.target_mtime_sec)}</td>
+            <td style="font-size:12px; color:var(--text-secondary);">${escapeHtml(m.technical_note)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } else if (appState.historyCategory === "unreliable") {
+        thead.innerHTML = `
+          <tr>
+            <th>Percorso Non Confrontabile con Certezza</th>
+            <th>Motivo</th>
+            <th>Spiegazione</th>
+          </tr>
+        `;
+        const items = rep.unreliable_paths || [];
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:18px; color:var(--text-secondary);">Tutti i percorsi sono risultati confrontabili in modo affidabile.</td></tr>`;
+          return;
+        }
+        items.forEach(u => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">⚠️ ${escapeHtml(u.rel_path_display)}</td>
+            <td><span class="badge badge-warn">${escapeHtml(JSON.stringify(u.reason))}</span></td>
+            <td style="font-size:12px; color:var(--text-secondary);">${escapeHtml(u.explanation)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    async function deleteSavedSnapshot(id) {
+      await apiPost("/api/snapshots/delete", { snapshot_id: id });
+      await loadHistoryView();
+    }
+
+    async function loadSnapshotIntoExplore(id) {
+      await apiPost("/api/snapshots/load", { snapshot_id: id });
+      appState.currentDirView = null;
+      await refreshAppState();
+      await switchMode("explore");
     }
 
     async function loadRecoverView() {
