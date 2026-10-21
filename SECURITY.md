@@ -18,6 +18,9 @@ DiskGarden interagisce direttamente con il filesystem locale dell'utente, inclus
    - Durante la scansione di `/`, gli pseudo-filesystem del kernel Linux (`/proc`, `/sys`, `/dev`, `/run`) vengono sempre esclusi alla radice anche se l'utente abilita `cross_mounts`.
 5. **Integrità delle transazioni SQLite**:
    - Il salvataggio degli snapshot avviene in una transazione `IMMEDIATE` con stato iniziale `'saving'`, promosso a `'completed'` o `'partial'` solo al termine dell'inserimento di tutti i nodi. Eventuali snapshot interrotti da un crash vengono isolati all'avvio successivo e mai usati come baseline di confronto.
+6. **Hardening del server IPC/HTTP locale (`127.0.0.1`)**:
+   - **Token casuale di sessione a 256 bit**: a ogni avvio `AppServer` genera 32 byte casuali da `/dev/urandom` (64 caratteri esadecimali) e richiede `X-DiskGarden-Token` (o `?token=...`) verificato in tempo costante (`constant_time_eq`). Qualsiasi richiesta priva di token o con token errato viene rifiutata con `401 Unauthorized`.
+   - **Protezione DNS Rebinding e Cross-Origin CSRF**: tutte le richieste verificano che l'header `Host` appartenga a `127.0.0.1` o `localhost` sulla porta della sessione e che gli eventuali header `Origin` e `Referer` coincidano con l'origine locale. Qualsiasi origine esterna viene rifiutata con `403 Forbidden`.
 
 ## Segnalazione di Vulnerabilità
 

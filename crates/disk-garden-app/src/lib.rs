@@ -334,9 +334,16 @@ impl AppState {
 }
 
 /// Embedded local HTTP server for the DiskGarden desktop interface.
+///
+/// Protected by:
+/// 1. Loopback-only binding (`127.0.0.1`).
+/// 2. Per-session 256-bit random token (`X-DiskGarden-Token` header or `token` query param)
+///    compared in constant time.
+/// 3. Strict `Host`, `Origin`, and `Referer` validation against DNS rebinding and cross-origin CSRF.
 pub struct AppServer {
     addr: SocketAddr,
     state: AppState,
+    session_token: Arc<String>,
 }
 
 impl AppServer {
@@ -344,26 +351,44 @@ impl AppServer {
     pub fn start(port: u16, state: AppState) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr()?;
+        let session_token = Arc::new(generate_session_token());
         let state_clone = state.clone();
+        let token_clone = session_token.clone();
+        let server_port = addr.port();
 
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let st = state_clone.clone();
+                let tok = token_clone.clone();
                 thread::spawn(move || {
-                    let _ = handle_connection(stream, &st);
+                    let _ = handle_connection(stream, &st, &tok, server_port);
                 });
             }
         });
 
-        Ok(Self { addr, state })
+        Ok(Self {
+            addr,
+            state,
+            session_token,
+        })
     }
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
+    /// Returns the per-session 256-bit random authentication token.
+    pub fn session_token(&self) -> &str {
+        &self.session_token
+    }
+
+    /// Returns the authenticated launch URL containing the session token.
     pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/", self.addr.port())
+        format!(
+            "http://127.0.0.1:{}/?token={}",
+            self.addr.port(),
+            self.session_token
+        )
     }
 
     pub fn state(&self) -> &AppState {
@@ -371,7 +396,67 @@ impl AppServer {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, state: &AppState) -> std::io::Result<()> {
+fn generate_session_token() -> String {
+    let mut bytes = [0u8; 32];
+    let mut f = fs::File::open("/dev/urandom").expect("open /dev/urandom for session token");
+    f.read_exact(&mut bytes)
+        .expect("read 32 random bytes from /dev/urandom");
+    let mut hex = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{:02x}", b);
+    }
+    hex
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn is_allowed_host(host_header: &str, expected_port: u16) -> bool {
+    let trimmed = host_header.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let (host, port_opt) = match trimmed.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (trimmed, None),
+    };
+    let host_ok = host.eq_ignore_ascii_case("127.0.0.1") || host.eq_ignore_ascii_case("localhost");
+    let port_ok = match port_opt {
+        Some(p) => p.parse::<u16>().ok() == Some(expected_port),
+        None => true,
+    };
+    host_ok && port_ok
+}
+
+fn is_allowed_origin_or_referer(val: &str, expected_port: u16) -> bool {
+    let trimmed = val.trim();
+    let p1 = format!("http://127.0.0.1:{}", expected_port);
+    let p2 = format!("http://localhost:{}", expected_port);
+    let check_prefix = |prefix: &str| {
+        if !trimmed.starts_with(prefix) {
+            return false;
+        }
+        let rest = &trimmed[prefix.len()..];
+        rest.is_empty() || rest.starts_with('/') || rest.starts_with('?')
+    };
+    check_prefix(&p1) || check_prefix(&p2)
+}
+
+fn handle_connection(
+    mut stream: TcpStream,
+    state: &AppState,
+    session_token: &str,
+    server_port: u16,
+) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut reader = BufReader::new(stream.try_clone()?);
 
@@ -387,14 +472,29 @@ fn handle_connection(mut stream: TcpStream, state: &AppState) -> std::io::Result
     let raw_target = parts[1];
 
     let mut content_length = 0usize;
+    let mut host_header: Option<String> = None;
+    let mut origin_header: Option<String> = None;
+    let mut referer_header: Option<String> = None;
+    let mut token_header: Option<String> = None;
+
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
             break;
         }
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse().unwrap_or(0);
+            let key = k.trim();
+            let val = v.trim();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("host") {
+                host_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("referer") {
+                referer_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("x-diskgarden-token") {
+                token_header = Some(val.to_string());
             }
         }
     }
@@ -404,19 +504,77 @@ fn handle_connection(mut stream: TcpStream, state: &AppState) -> std::io::Result
         reader.read_exact(&mut body)?;
     }
 
+    // 1. Validate Host header (DNS rebinding protection)
+    if let Some(ref h) = host_header {
+        if !is_allowed_host(h, server_port) {
+            return write_json(
+                &mut stream,
+                403,
+                &serde_json::json!({ "error": "Host header non autorizzato (protezione DNS rebinding)." }),
+            );
+        }
+    } else {
+        return write_json(
+            &mut stream,
+            403,
+            &serde_json::json!({ "error": "Host header obbligatorio mancante." }),
+        );
+    }
+
+    // 2. Validate Origin and Referer headers when present (Cross-Origin CSRF protection)
+    if let Some(ref orig) = origin_header {
+        if !is_allowed_origin_or_referer(orig, server_port) {
+            return write_json(
+                &mut stream,
+                403,
+                &serde_json::json!({ "error": "Origin non autorizzata (protezione CSRF cross-origin)." }),
+            );
+        }
+    }
+    if let Some(ref refer) = referer_header {
+        if !is_allowed_origin_or_referer(refer, server_port) {
+            return write_json(
+                &mut stream,
+                403,
+                &serde_json::json!({ "error": "Referer non autorizzato (protezione CSRF cross-origin)." }),
+            );
+        }
+    }
+
     let (path, query_str) = match raw_target.split_once('?') {
         Some((p, q)) => (p, q),
         None => (raw_target, ""),
     };
     let query = parse_query(query_str);
 
+    // 3. Validate per-session random token (header `X-DiskGarden-Token` or `?token=...`)
+    let supplied_token = token_header
+        .as_deref()
+        .or_else(|| query.get("token").map(String::as_str));
+    let token_valid = supplied_token
+        .map(|t| constant_time_eq(t.as_bytes(), session_token.as_bytes()))
+        .unwrap_or(false);
+
+    if !token_valid {
+        return write_json(
+            &mut stream,
+            401,
+            &serde_json::json!({ "error": "Session token mancante o non valido." }),
+        );
+    }
+
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => {
+            let token_script = format!(
+                "<script>window.__DISKGARDEN_TOKEN__ = {:?};</script></head>",
+                session_token
+            );
+            let html = UI_INDEX_HTML.replacen("</head>", &token_script, 1);
             write_response(
                 &mut stream,
                 200,
                 "text/html; charset=utf-8",
-                UI_INDEX_HTML.as_bytes(),
+                html.as_bytes(),
             )
         }
         ("GET", "/api/state") => {
@@ -1109,11 +1267,13 @@ fn write_response(
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         _ => "Internal Server Error",
     };
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
         status,
         status_text,
         content_type,

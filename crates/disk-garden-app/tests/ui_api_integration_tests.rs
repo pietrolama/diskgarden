@@ -4,7 +4,7 @@ use disk_garden_app::{
     StartScanRequest,
 };
 use disk_garden_core::{
-     DiffReport, DiffSortField, DirectoryNavigationView, EntryDetailView, EntryType, RecoverReport,
+    DiffReport, DiffSortField, DirectoryNavigationView, EntryDetailView, EntryType, RecoverReport,
     ScanStatus, SizeMetric, SnapshotHeader, SnapshotStore, SortField,
 };
 use serde::de::DeserializeOwned;
@@ -16,6 +16,114 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
+
+#[test]
+fn test_http_hardening_rejects_missing_or_wrong_token_and_invalid_origins_and_hosts() {
+    let state = AppState::new();
+    let server = AppServer::start(0, state).expect("start local app server");
+    let addr = server.addr();
+    let port = addr.port();
+    let token = server.session_token();
+    assert_eq!(token.len(), 64, "expected 256-bit hex session token");
+
+    // 1. Missing token on `/` and `/api/state` -> 401 Unauthorized
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 401"),
+        "expected 401 without token on /, got: {}",
+        status_line
+    );
+
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 401"),
+        "expected 401 without token on /api/state, got: {}",
+        status_line
+    );
+
+    // 2. Wrong token -> 401 Unauthorized
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-DiskGarden-Token: 0000000000000000000000000000000000000000000000000000000000000000\r\nConnection: close\r\n\r\n",
+            port
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 401"),
+        "expected 401 with wrong token, got: {}",
+        status_line
+    );
+
+    // 3. Valid token but foreign Origin (`Origin: https://evil.example`) -> 403 Forbidden
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "POST /api/scan/cancel HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: https://evil.example\r\nX-DiskGarden-Token: {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+            port, token
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 403"),
+        "expected 403 with foreign Origin, got: {}",
+        status_line
+    );
+
+    // 4. Valid token but foreign Referer (`Referer: http://evil.local/page`) -> 403 Forbidden
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nReferer: http://evil.local/page\r\nX-DiskGarden-Token: {}\r\nConnection: close\r\n\r\n",
+            port, token
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 403"),
+        "expected 403 with foreign Referer, got: {}",
+        status_line
+    );
+
+    // 5. Valid token but invalid Host header (DNS rebinding attempt `Host: attacker.com`) -> 403 Forbidden
+    let (status_line, _) = raw_http_request(
+        addr,
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: attacker.com\r\nX-DiskGarden-Token: {}\r\nConnection: close\r\n\r\n",
+            token
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 403"),
+        "expected 403 with DNS-rebound Host header, got: {}",
+        status_line
+    );
+
+    // 6. Valid token + valid local Origin + valid Host -> 200 OK
+    let (status_line, body) = raw_http_request(
+        addr,
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nX-DiskGarden-Token: {}\r\nConnection: close\r\n\r\n",
+            port, port, token
+        ),
+    );
+    assert!(
+        status_line.starts_with("HTTP/1.1 200"),
+        "expected 200 with valid token and origin, got: {}",
+        status_line
+    );
+    assert!(body.contains("default_cwd"));
+}
 
 #[test]
 fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover() {
@@ -49,23 +157,23 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
 
     let state = AppState::new();
     let server = AppServer::start(0, state).expect("start local app server");
-    let addr = server.addr();
 
-    // 1. Verify UI HTML is served at `/`
-    let html = http_get_raw(addr, "/");
+    // 1. Verify UI HTML is served at `/?token=...` and injects session token
+    let html = http_get_raw(&server, "/");
     assert!(html.contains("DiskGarden"));
     assert!(html.contains("Treemap Squarified"));
+    assert!(html.contains(server.session_token()));
 
     // 2. Test directory browser API (`/api/fs/list-dirs`)
     let dir_listing: FsDirListing = http_get_json(
-        addr,
+        &server,
         &format!("/api/fs/list-dirs?path={}", root.display()),
     );
     assert!(dir_listing.directories.iter().any(|d| d.name == "projects"));
 
     // 3. Start scan via `POST /api/scan/start`
     let start_res: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/scan/start",
         &StartScanRequest {
             root_path: root.to_string_lossy().into_owned(),
@@ -78,7 +186,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     // Poll `/api/state` until scan finishes
     let mut final_state: Option<AppStateResponse> = None;
     for _ in 0..100 {
-        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        let st: AppStateResponse = http_get_json(&server, "/api/state");
         if !st.is_scanning && st.scan_overview.is_some() {
             final_state = Some(st);
             break;
@@ -88,7 +196,9 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     let st = final_state.expect("scan should finish promptly");
     assert_eq!(st.default_cwd, "/");
     assert!(
-        st.volumes.iter().any(|v| v.mount_point == "/" && v.total_bytes > 0),
+        st.volumes
+            .iter()
+            .any(|v| v.mount_point == "/" && v.total_bytes > 0),
         "expected root volume '/' in volumes list: {:?}",
         st.volumes
     );
@@ -99,7 +209,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     // 4. Progressive navigation from Root -> `projects` -> `projects/app` -> `projects/app/src` -> `main.rs`
     let root_id = ov.root_id.unwrap();
     let root_view: DirectoryNavigationView = http_get_json(
-        addr,
+        &server,
         &format!("/api/explore/dir?id={}&metric=apparent", root_id.0),
     );
     assert_eq!(root_view.breadcrumbs.len(), 1);
@@ -113,7 +223,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     assert_eq!(projects_summary.subtree_apparent_bytes, 412_000);
 
     let projects_view: DirectoryNavigationView = http_get_json(
-        addr,
+        &server,
         &format!(
             "/api/explore/dir?id={}&metric=apparent",
             projects_summary.id.0
@@ -126,7 +236,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     assert_eq!(app_summary.name_display, "app");
 
     let app_view: DirectoryNavigationView = http_get_json(
-        addr,
+        &server,
         &format!("/api/explore/dir?id={}&metric=apparent", app_summary.id.0),
     );
     assert_eq!(app_view.breadcrumbs.len(), 3);
@@ -137,7 +247,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
         .unwrap();
 
     let src_view: DirectoryNavigationView = http_get_json(
-        addr,
+        &server,
         &format!("/api/explore/dir?id={}&metric=apparent", src_summary.id.0),
     );
     assert_eq!(src_view.breadcrumbs.len(), 4);
@@ -149,9 +259,11 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
 
     // Inspect individual file via `/api/entry?id=...`
     let main_detail: EntryDetailView =
-        http_get_json(addr, &format!("/api/entry?id={}", main_rs.id.0));
+        http_get_json(&server, &format!("/api/entry?id={}", main_rs.id.0));
     assert_eq!(main_detail.summary.apparent_bytes, 12_000);
-    assert!(main_detail.abs_path_display.ends_with("projects/app/src/main.rs"));
+    assert!(main_detail
+        .abs_path_display
+        .ends_with("projects/app/src/main.rs"));
 
     // 5. Verify Treemap tail bucketing on `many_small_files` (120 files -> bounded to <= 21 tiles)
     let many_dir = root_view
@@ -160,7 +272,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
         .find(|c| c.name_display == "many_small_files")
         .unwrap();
     let many_view: DirectoryNavigationView = http_get_json(
-        addr,
+        &server,
         &format!(
             "/api/explore/dir?id={}&metric=apparent&max_tiles=20",
             many_dir.id.0
@@ -174,7 +286,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
 
     // Fetch bucketed items via `POST /api/explore/bucket`
     let bucket_res: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/explore/bucket",
         &BucketItemsRequest {
             entry_ids: tail_tile.bucketed_entry_ids.clone(),
@@ -186,7 +298,7 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
 
     // 6. Verify Search & Filter API (`POST /api/search`)
     let search_res: SearchResponse = http_post_json(
-        addr,
+        &server,
         "/api/search",
         &SearchRequest {
             query: Some("binary.bin".to_string()),
@@ -211,10 +323,9 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
     );
 
     // 7. Verify `Recover` mode 3-tier qualification (`GET /api/recover`)
-    let recover: RecoverReport = http_get_json(addr, "/api/recover?metric=allocated&limit=10");
+    let recover: RecoverReport = http_get_json(&server, "/api/recover?metric=allocated&limit=10");
     assert!(recover.cache_and_temp_candidates.len() >= 2);
 
-    // `projects/app/target/debug` has no external hard links -> verified == detected_allocated
     let cargo_cand = recover
         .cache_and_temp_candidates
         .iter()
@@ -226,8 +337,6 @@ fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover(
         cargo_cand.qualification.detected_allocated_bytes
     );
 
-    // `.cache` contains `wheel_a.whl` (unshared) + `shared_ext.whl` (hard-linked outside root!)
-    // so verified_recoverable_bytes must be strictly less than detected_allocated_bytes!
     let cache_cand = recover
         .cache_and_temp_candidates
         .iter()
@@ -257,11 +366,10 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
 
     let state = AppState::with_snapshot_store(store);
     let server = AppServer::start(0, state).expect("start local app server");
-    let addr = server.addr();
 
     // 1. Run baseline scan T0
     let _: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/scan/start",
         &StartScanRequest {
             root_path: root.to_string_lossy().into_owned(),
@@ -270,7 +378,7 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
         },
     );
     for _ in 0..100 {
-        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        let st: AppStateResponse = http_get_json(&server, "/api/state");
         if !st.is_scanning && st.scan_overview.is_some() {
             break;
         }
@@ -279,7 +387,7 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
 
     // 2. Save baseline snapshot via `POST /api/snapshots/save`
     let snap_t0: SnapshotHeader = http_post_json(
-        addr,
+        &server,
         "/api/snapshots/save",
         &SaveSnapshotRequest {
             label: Some("Baseline T0".to_string()),
@@ -295,7 +403,7 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
 
     // 4. Run scan T1
     let _: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/scan/start",
         &StartScanRequest {
             root_path: root.to_string_lossy().into_owned(),
@@ -304,7 +412,7 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
         },
     );
     for _ in 0..100 {
-        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        let st: AppStateResponse = http_get_json(&server, "/api/state");
         if !st.is_scanning
             && st
                 .scan_overview
@@ -319,7 +427,7 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
 
     // 5. Compare saved `snap_t0` against live current scan (`target_snapshot_id: None`)
     let diff: DiffReport = http_post_json(
-        addr,
+        &server,
         "/api/history/diff",
         &HistoryDiffRequest {
             base_snapshot_id: snap_t0.id,
@@ -343,17 +451,17 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
 
     // 6. Save second snapshot T1, list snapshots, load T0 back into Explore, and delete T0
     let snap_t1: SnapshotHeader = http_post_json(
-        addr,
+        &server,
         "/api/snapshots/save",
         &SaveSnapshotRequest {
             label: Some("After Growth T1".to_string()),
         },
     );
-    let listed: Vec<SnapshotHeader> = http_get_json(addr, "/api/snapshots");
+    let listed: Vec<SnapshotHeader> = http_get_json(&server, "/api/snapshots");
     assert_eq!(listed.len(), 2);
 
     let loaded_ov: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/snapshots/load",
         &LoadSnapshotRequest {
             snapshot_id: snap_t0.id,
@@ -362,14 +470,14 @@ fn test_milestone_3_history_snapshots_and_diff_api() {
     assert_eq!(loaded_ov["total_apparent_bytes"], 40_000);
 
     let del_res: serde_json::Value = http_post_json(
-        addr,
+        &server,
         "/api/snapshots/delete",
         &DeleteSnapshotRequest {
             snapshot_id: snap_t0.id,
         },
     );
     assert_eq!(del_res["deleted"], true);
-    let remaining: Vec<SnapshotHeader> = http_get_json(addr, "/api/snapshots");
+    let remaining: Vec<SnapshotHeader> = http_get_json(&server, "/api/snapshots");
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, snap_t1.id);
 }
@@ -381,34 +489,55 @@ fn write_file(path: &Path, size: usize) {
     }
 }
 
-fn http_get_raw(addr: std::net::SocketAddr, path: &str) -> String {
+fn raw_http_request(addr: std::net::SocketAddr, raw_req: &str) -> (String, String) {
     let mut stream = TcpStream::connect(addr).unwrap();
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        path
-    );
-    stream.write_all(req.as_bytes()).unwrap();
+    stream.write_all(raw_req.as_bytes()).unwrap();
     let mut buf = String::new();
     stream.read_to_string(&mut buf).unwrap();
-    let (_, body) = buf.split_once("\r\n\r\n").unwrap();
-    body.to_string()
+    let (headers, body) = buf.split_once("\r\n\r\n").unwrap_or((&buf, ""));
+    let status_line = headers.lines().next().unwrap_or("").to_string();
+    (status_line, body.to_string())
 }
 
-fn http_get_json<T: DeserializeOwned>(addr: std::net::SocketAddr, path: &str) -> T {
-    let body = http_get_raw(addr, path);
-    serde_json::from_str(&body).unwrap_or_else(|e| panic!("failed to parse JSON from {}: {}\nBody: {}", path, e, body))
+fn http_get_raw(server: &AppServer, path: &str) -> String {
+    let addr = server.addr();
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-DiskGarden-Token: {}\r\nConnection: close\r\n\r\n",
+        path,
+        addr.port(),
+        server.session_token()
+    );
+    let (status_line, body) = raw_http_request(addr, &req);
+    assert!(
+        status_line.starts_with("HTTP/1.1 200"),
+        "expected 200 OK for GET {}, got: {}\nBody: {}",
+        path,
+        status_line,
+        body
+    );
+    body
+}
+
+fn http_get_json<T: DeserializeOwned>(server: &AppServer, path: &str) -> T {
+    let body = http_get_raw(server, path);
+    serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("failed to parse JSON from {}: {}\nBody: {}", path, e, body))
 }
 
 fn http_post_json<B: Serialize, T: DeserializeOwned>(
-    addr: std::net::SocketAddr,
+    server: &AppServer,
     path: &str,
     payload: &B,
 ) -> T {
+    let addr = server.addr();
     let json_bytes = serde_json::to_vec(payload).unwrap();
     let mut stream = TcpStream::connect(addr).unwrap();
     let req = format!(
-        "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nX-DiskGarden-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         path,
+        addr.port(),
+        addr.port(),
+        server.session_token(),
         json_bytes.len()
     );
     stream.write_all(req.as_bytes()).unwrap();
@@ -416,5 +545,10 @@ fn http_post_json<B: Serialize, T: DeserializeOwned>(
     let mut buf = String::new();
     stream.read_to_string(&mut buf).unwrap();
     let (_, body) = buf.split_once("\r\n\r\n").unwrap();
-    serde_json::from_str(body).unwrap_or_else(|e| panic!("failed to parse JSON from POST {}: {}\nBody: {}", path, e, body))
+    serde_json::from_str(body).unwrap_or_else(|e| {
+        panic!(
+            "failed to parse JSON from POST {}: {}\nBody: {}",
+            path, e, body
+        )
+    })
 }

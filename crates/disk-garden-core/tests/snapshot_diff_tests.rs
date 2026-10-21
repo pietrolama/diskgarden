@@ -266,3 +266,125 @@ fn test_temporal_diff_added_removed_resized_metadata_only_and_unreliable_paths()
     sorted_paths.sort_unstable();
     assert_eq!(paths, sorted_paths);
 }
+
+#[test]
+fn test_large_synthetic_tree_temporal_diff_benchmark_and_accuracy() {
+    use std::time::Instant;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let db_path = tmp.path().join("benchmark_snapshots.db");
+    let root = tmp.path().join("large_tree");
+
+    // Build 100 directories x 50 files = 5,000 files (1,024 B each = 5,120,000 B total apparent)
+    for d in 0..100 {
+        let dir_path = root.join(format!("module_{:03}/sub_{:02}", d / 10, d));
+        fs::create_dir_all(&dir_path).unwrap();
+        for f in 0..50 {
+            write_bytes(&dir_path.join(format!("item_{:03}.dat", f)), 1_024, b'A');
+        }
+    }
+
+    let store = SnapshotStore::open(&db_path).unwrap();
+
+    // 1. Scan & Save T0
+    let t0_scan_start = Instant::now();
+    let scan_t0 = scan_directory(&ScanConfig::new(&root), &CancelToken::new());
+    let t0_scan_ms = t0_scan_start.elapsed().as_millis();
+    assert_eq!(scan_t0.status, ScanStatus::Completed);
+    assert_eq!(scan_t0.total_files_count, 5_000);
+    assert_eq!(scan_t0.total_apparent_bytes, 5_000 * 1_024);
+
+    let t0_save_start = Instant::now();
+    let snap_t0 = store
+        .save_snapshot(&scan_t0, Some("Large T0"), false, false)
+        .unwrap();
+    let t0_save_ms = t0_save_start.elapsed().as_millis();
+
+    // 2. Apply known mutations across the tree:
+    // - Grow 25 files in module_000 (+4,096 B each -> +102,400 B)
+    for f in 0..25 {
+        let p = root.join(format!("module_000/sub_00/item_{:03}.dat", f));
+        write_bytes(&p, 1_024 + 4_096, b'G');
+    }
+    // - Shrink 10 files in module_001 (-512 B each -> -5,120 B)
+    for f in 0..10 {
+        let p = root.join(format!("module_001/sub_10/item_{:03}.dat", f));
+        write_bytes(&p, 1_024 - 512, b'S');
+    }
+    // - Add 40 new files in module_002 (+2,048 B each -> +81,920 B)
+    for f in 0..40 {
+        let p = root.join(format!("module_002/sub_20/added_{:03}.dat", f));
+        write_bytes(&p, 2_048, b'N');
+    }
+    // - Remove 15 files in module_003 (-1,024 B each -> -15,360 B)
+    for f in 0..15 {
+        let p = root.join(format!("module_003/sub_30/item_{:03}.dat", f));
+        fs::remove_file(p).unwrap();
+    }
+    // - Replace 12 files via atomic rename in module_004 with identical size 1,024 B (0 B delta, new inode)
+    for f in 0..12 {
+        let tmp_p = root.join(format!("module_004/sub_40/item_{:03}.dat.tmp", f));
+        let dst_p = root.join(format!("module_004/sub_40/item_{:03}.dat", f));
+        write_bytes(&tmp_p, 1_024, b'R');
+        fs::rename(&tmp_p, &dst_p).unwrap();
+    }
+
+    // 3. Scan & Save T1
+    let t1_scan_start = Instant::now();
+    let scan_t1 = scan_directory(&ScanConfig::new(&root), &CancelToken::new());
+    let t1_scan_ms = t1_scan_start.elapsed().as_millis();
+    assert_eq!(scan_t1.status, ScanStatus::Completed);
+    assert_eq!(scan_t1.total_files_count, 5_025);
+
+    let t1_save_start = Instant::now();
+    let snap_t1 = store
+        .save_snapshot(&scan_t1, Some("Large T1"), false, false)
+        .unwrap();
+    let t1_save_ms = t1_save_start.elapsed().as_millis();
+
+    // 4. Load both snapshots from SQLite and run DiffEngine
+    let load_start = Instant::now();
+    let loaded_t0 = store.load_snapshot(snap_t0.id).unwrap();
+    let loaded_t1 = store.load_snapshot(snap_t1.id).unwrap();
+    let load_both_ms = load_start.elapsed().as_millis();
+
+    let diff_start = Instant::now();
+    let opts = DiffOptions {
+        sort_field: DiffSortField::SignedDelta,
+        descending: true,
+        metric: SizeMetric::Apparent,
+        max_items_per_category: 500,
+        base_snapshot_id: Some(snap_t0.id),
+        target_snapshot_id: Some(snap_t1.id),
+        base_label: snap_t0.label,
+        target_label: snap_t1.label,
+    };
+    let report = compare_scans(&loaded_t0.scan, &loaded_t1.scan, &opts).unwrap();
+    let diff_ms = diff_start.elapsed().as_millis();
+
+    let db_size_bytes = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    eprintln!(
+        "[Benchmark 5,000 file] T0 scan={}ms save={}ms | T1 scan={}ms save={}ms | SQLite load(2)={}ms | DiffEngine={}ms | DB size={} KiB",
+        t0_scan_ms,
+        t0_save_ms,
+        t1_scan_ms,
+        t1_save_ms,
+        load_both_ms,
+        diff_ms,
+        db_size_bytes / 1024
+    );
+
+    // 5. Verify exact mathematical accuracy of all deltas
+    let expected_net_apparent_delta: i64 = (25 * 4_096) - (10 * 512) + (40 * 2_048) - (15 * 1_024);
+    assert_eq!(report.net_apparent_delta_bytes, expected_net_apparent_delta);
+    assert_eq!(report.net_files_delta_count, 25);
+    assert_eq!(report.added_files.len(), 40);
+    assert_eq!(report.removed_files.len(), 15);
+    assert_eq!(report.resized_files.len(), 35); // 25 grown + 10 shrunk
+    assert_eq!(report.metadata_only_modified_files.len(), 12); // 12 atomic rewrites with same size
+    assert!(
+        diff_ms < 500,
+        "DiffEngine on 5,000 files should complete in < 500ms (actual: {}ms)",
+        diff_ms
+    );
+}

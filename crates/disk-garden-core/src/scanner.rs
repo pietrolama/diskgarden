@@ -598,7 +598,19 @@ fn run_parallel_batched_scan<F>(
     let worker_threads = thread::available_parallelism()
         .map(|n| n.get().clamp(2, 12))
         .unwrap_or(4);
-    let batch_size = worker_threads * 16;
+    let batch_size = worker_threads * 6;
+
+    // Emit immediate initial progress tick so UI shows active scanning right away
+    on_progress(&ScanProgress {
+        dirs_scanned: 1,
+        files_scanned: 0,
+        symlinks_scanned: 0,
+        apparent_bytes_so_far: 0,
+        allocated_bytes_so_far: 0,
+        errors_count: 0,
+        current_rel_path: String::new(),
+        elapsed_ms: start_instant.elapsed().as_millis() as u64,
+    });
 
     while !frontier.is_empty() {
         if cancel_token.is_cancelled() {

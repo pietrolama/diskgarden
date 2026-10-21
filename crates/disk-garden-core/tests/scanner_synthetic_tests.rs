@@ -496,6 +496,130 @@ fn test_mount_boundary_exclusion() {
     }
 }
 
+#[test]
+fn test_realistic_comparison_with_gnu_du_allocated_apparent_and_hardlinks() {
+    use std::process::Command;
+
+    // 1. Controlled tree with regular files, subdirectories, sparse files, and multiple hard links
+    let tmp = TempDir::new().expect("create tempdir");
+    let root = tmp.path().join("du_parity");
+    fs::create_dir_all(root.join("sub_a")).unwrap();
+    fs::create_dir_all(root.join("sub_b")).unwrap();
+
+    write_sized_file(&root.join("sub_a/regular.bin"), 45_000);
+    // Hard link in sub_b sharing the exact same inode as sub_a/regular.bin
+    fs::hard_link(
+        root.join("sub_a/regular.bin"),
+        root.join("sub_b/regular_hardlink.bin"),
+    )
+    .unwrap();
+
+    // Sparse file: 512 KiB logical apparent size, 0 allocated blocks
+    let sparse = File::create(root.join("sub_a/sparse.img")).unwrap();
+    sparse.set_len(512 * 1024).unwrap();
+
+    let scan = scan_directory(&ScanConfig::new(&root), &CancelToken::new());
+    assert_eq!(scan.status, ScanStatus::Completed);
+
+    // GNU `du` behavior on Linux (coreutils 9.x):
+    // 1. `du -s -B1 <dir>` (allocated physical space) sums:
+    //    - deduplicated allocated bytes of all files (`scan.total_allocated_bytes`)
+    //    - allocated inode metadata blocks of directories and symlinks (`dir_and_symlink_allocated`)
+    // 2. `du -s -B1 --apparent-size <dir>` (logical apparent space) sums ONLY the logical
+    //    `st_size` of files (and symlinks), excluding directory inode `st_size` — matching
+    //    `scan.total_apparent_bytes + symlink_apparent` directly!
+    let dir_and_symlink_allocated: u64 = scan
+        .entries
+        .iter()
+        .filter(|e| e.entry_type != EntryType::File)
+        .map(|e| e.allocated_bytes)
+        .sum();
+    let symlink_apparent: u64 = scan
+        .entries
+        .iter()
+        .filter(|e| e.entry_type == EntryType::Symlink)
+        .map(|e| e.apparent_bytes)
+        .sum();
+
+    let du_alloc_dedup = run_gnu_du_bytes(&["-s", "-B1"], &root);
+    let du_alloc_no_dedup = run_gnu_du_bytes(&["-s", "-B1", "-l"], &root);
+    let du_apparent_dedup = run_gnu_du_bytes(&["-s", "-B1", "--apparent-size"], &root);
+    let du_apparent_no_dedup = run_gnu_du_bytes(&["-s", "-B1", "--apparent-size", "-l"], &root);
+
+    assert_eq!(
+        scan.total_allocated_bytes + dir_and_symlink_allocated,
+        du_alloc_dedup,
+        "DiskGarden deduplicated allocated bytes + dir inode blocks must equal `du -s -B1`"
+    );
+    assert_eq!(
+        scan.total_allocated_bytes
+            + scan.hardlink_saved_allocated_bytes
+            + dir_and_symlink_allocated,
+        du_alloc_no_dedup,
+        "DiskGarden non-deduplicated allocated bytes + dir inode blocks must equal `du -s -B1 -l`"
+    );
+    assert_eq!(
+        scan.total_apparent_bytes + symlink_apparent,
+        du_apparent_dedup,
+        "DiskGarden deduplicated apparent bytes must equal `du -s -B1 --apparent-size` directly"
+    );
+    assert_eq!(
+        scan.total_apparent_bytes + scan.hardlink_saved_apparent_bytes + symlink_apparent,
+        du_apparent_no_dedup,
+        "DiskGarden non-deduplicated apparent bytes must equal `du -s -B1 --apparent-size -l` directly"
+    );
+
+    // 2. Also verify on the real workspace `crates/` directory
+    let real_crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ directory");
+    let real_scan = scan_directory(&ScanConfig::new(real_crates_dir), &CancelToken::new());
+    assert_eq!(real_scan.status, ScanStatus::Completed);
+
+    let real_dir_alloc: u64 = real_scan
+        .entries
+        .iter()
+        .filter(|e| e.entry_type != EntryType::File)
+        .map(|e| e.allocated_bytes)
+        .sum();
+    let real_symlink_app: u64 = real_scan
+        .entries
+        .iter()
+        .filter(|e| e.entry_type == EntryType::Symlink)
+        .map(|e| e.apparent_bytes)
+        .sum();
+
+    let real_du_alloc = run_gnu_du_bytes(&["-s", "-B1"], real_crates_dir);
+    let real_du_app = run_gnu_du_bytes(&["-s", "-B1", "--apparent-size"], real_crates_dir);
+
+    assert_eq!(
+        real_scan.total_allocated_bytes + real_dir_alloc,
+        real_du_alloc,
+        "Real crates/ directory allocated bytes + dir inode blocks must match `du -s -B1` to the exact byte"
+    );
+    assert_eq!(
+        real_scan.total_apparent_bytes + real_symlink_app,
+        real_du_app,
+        "Real crates/ directory apparent bytes must match `du -s -B1 --apparent-size` to the exact byte"
+    );
+
+    fn run_gnu_du_bytes(flags: &[&str], target: &std::path::Path) -> u64 {
+        let out = Command::new("/usr/bin/du")
+            .args(flags)
+            .arg(target)
+            .output()
+            .expect("execute /usr/bin/du");
+        assert!(out.status.success(), "du failed: {:?}", out);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout
+            .split_whitespace()
+            .next()
+            .expect("du byte number")
+            .parse::<u64>()
+            .expect("parse du u64")
+    }
+}
+
 fn write_sized_file(path: &std::path::Path, size: usize) {
     let mut file = File::create(path).expect("create test file");
     if size > 0 {
