@@ -1,0 +1,287 @@
+use disk_garden_app::{
+    AppServer, AppState, AppStateResponse, BucketItemsRequest, FsDirListing, SearchRequest,
+    SearchResponse, StartScanRequest,
+};
+use disk_garden_core::{
+    DirectoryNavigationView, EntryDetailView, EntryType, RecoverReport, ScanStatus, SortField,
+};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
+use tempfile::TempDir;
+
+#[test]
+fn test_milestone_2_progressive_navigation_treemap_bucketing_search_and_recover() {
+    let tmp = TempDir::new().expect("create tempdir");
+    let root = tmp.path().join("work_root");
+    fs::create_dir_all(root.join("projects/app/src")).unwrap();
+    fs::create_dir_all(root.join("projects/app/target/debug")).unwrap();
+    fs::create_dir_all(root.join(".cache/pip")).unwrap();
+    fs::create_dir_all(root.join("many_small_files")).unwrap();
+
+    // Known files
+    write_file(&root.join("projects/app/src/main.rs"), 12_000);
+    write_file(&root.join("projects/app/target/debug/binary.bin"), 400_000);
+    write_file(&root.join(".cache/pip/wheel_a.whl"), 90_000);
+
+    // Create a file in .cache that is hard-linked outside `work_root`
+    let shared_cache_file = root.join(".cache/pip/shared_ext.whl");
+    write_file(&shared_cache_file, 128_000);
+    let outside_link = tmp.path().join("external_hardlink.whl");
+    fs::hard_link(&shared_cache_file, &outside_link).unwrap();
+
+    // Populate `many_small_files` with 120 small files to verify Treemap tail bucketing
+    for i in 0..120 {
+        write_file(
+            &root
+                .join("many_small_files")
+                .join(format!("small_{:03}.txt", i)),
+            500 + (i % 10),
+        );
+    }
+
+    let state = AppState::new();
+    let server = AppServer::start(0, state).expect("start local app server");
+    let addr = server.addr();
+
+    // 1. Verify UI HTML is served at `/`
+    let html = http_get_raw(addr, "/");
+    assert!(html.contains("DiskGarden"));
+    assert!(html.contains("Treemap Squarified"));
+
+    // 2. Test directory browser API (`/api/fs/list-dirs`)
+    let dir_listing: FsDirListing = http_get_json(
+        addr,
+        &format!("/api/fs/list-dirs?path={}", root.display()),
+    );
+    assert!(dir_listing.directories.iter().any(|d| d.name == "projects"));
+
+    // 3. Start scan via `POST /api/scan/start`
+    let start_res: serde_json::Value = http_post_json(
+        addr,
+        "/api/scan/start",
+        &StartScanRequest {
+            root_path: root.to_string_lossy().into_owned(),
+            follow_symlinks: false,
+            cross_mounts: false,
+        },
+    );
+    assert_eq!(start_res["started"], true);
+
+    // Poll `/api/state` until scan finishes
+    let mut final_state: Option<AppStateResponse> = None;
+    for _ in 0..100 {
+        let st: AppStateResponse = http_get_json(addr, "/api/state");
+        if !st.is_scanning && st.scan_overview.is_some() {
+            final_state = Some(st);
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let st = final_state.expect("scan should finish promptly");
+    assert_eq!(st.default_cwd, "/");
+    assert!(
+        st.volumes.iter().any(|v| v.mount_point == "/" && v.total_bytes > 0),
+        "expected root volume '/' in volumes list: {:?}",
+        st.volumes
+    );
+    let ov = st.scan_overview.expect("scan overview present");
+    assert_eq!(ov.status, ScanStatus::Completed);
+    assert_eq!(ov.total_files_count, 124);
+
+    // 4. Progressive navigation from Root -> `projects` -> `projects/app` -> `projects/app/src` -> `main.rs`
+    let root_id = ov.root_id.unwrap();
+    let root_view: DirectoryNavigationView = http_get_json(
+        addr,
+        &format!("/api/explore/dir?id={}&metric=apparent", root_id.0),
+    );
+    assert_eq!(root_view.breadcrumbs.len(), 1);
+    assert!(root_view.treemap_tiles.len() <= 4);
+
+    let projects_summary = root_view
+        .children
+        .iter()
+        .find(|c| c.name_display == "projects")
+        .expect("projects dir in root children");
+    assert_eq!(projects_summary.subtree_apparent_bytes, 412_000);
+
+    let projects_view: DirectoryNavigationView = http_get_json(
+        addr,
+        &format!(
+            "/api/explore/dir?id={}&metric=apparent",
+            projects_summary.id.0
+        ),
+    );
+    assert_eq!(projects_view.breadcrumbs.len(), 2);
+    assert_eq!(projects_view.breadcrumbs[1].name_display, "projects");
+
+    let app_summary = &projects_view.children[0];
+    assert_eq!(app_summary.name_display, "app");
+
+    let app_view: DirectoryNavigationView = http_get_json(
+        addr,
+        &format!("/api/explore/dir?id={}&metric=apparent", app_summary.id.0),
+    );
+    assert_eq!(app_view.breadcrumbs.len(), 3);
+    let src_summary = app_view
+        .children
+        .iter()
+        .find(|c| c.name_display == "src")
+        .unwrap();
+
+    let src_view: DirectoryNavigationView = http_get_json(
+        addr,
+        &format!("/api/explore/dir?id={}&metric=apparent", src_summary.id.0),
+    );
+    assert_eq!(src_view.breadcrumbs.len(), 4);
+    assert_eq!(src_view.children.len(), 1);
+    let main_rs = &src_view.children[0];
+    assert_eq!(main_rs.name_display, "main.rs");
+    assert_eq!(main_rs.entry_type, EntryType::File);
+    assert_eq!(main_rs.apparent_bytes, 12_000);
+
+    // Inspect individual file via `/api/entry?id=...`
+    let main_detail: EntryDetailView =
+        http_get_json(addr, &format!("/api/entry?id={}", main_rs.id.0));
+    assert_eq!(main_detail.summary.apparent_bytes, 12_000);
+    assert!(main_detail.abs_path_display.ends_with("projects/app/src/main.rs"));
+
+    // 5. Verify Treemap tail bucketing on `many_small_files` (120 files -> bounded to <= 21 tiles)
+    let many_dir = root_view
+        .children
+        .iter()
+        .find(|c| c.name_display == "many_small_files")
+        .unwrap();
+    let many_view: DirectoryNavigationView = http_get_json(
+        addr,
+        &format!(
+            "/api/explore/dir?id={}&metric=apparent&max_tiles=20",
+            many_dir.id.0
+        ),
+    );
+    assert_eq!(many_view.total_children_count, 120);
+    assert_eq!(many_view.treemap_tiles.len(), 21); // 20 individual + 1 tail bucket
+    let tail_tile = many_view.treemap_tiles.last().unwrap();
+    assert!(tail_tile.is_tail_bucket);
+    assert_eq!(tail_tile.bucketed_items_count, 100);
+
+    // Fetch bucketed items via `POST /api/explore/bucket`
+    let bucket_res: serde_json::Value = http_post_json(
+        addr,
+        "/api/explore/bucket",
+        &BucketItemsRequest {
+            entry_ids: tail_tile.bucketed_entry_ids.clone(),
+            sort_field: Some(SortField::Name),
+            descending: Some(false),
+        },
+    );
+    assert_eq!(bucket_res["items"].as_array().unwrap().len(), 100);
+
+    // 6. Verify Search & Filter API (`POST /api/search`)
+    let search_res: SearchResponse = http_post_json(
+        addr,
+        "/api/search",
+        &SearchRequest {
+            query: Some("binary.bin".to_string()),
+            entry_type: None,
+            min_bytes: None,
+            metric: None,
+            only_errors: false,
+            only_sparse: false,
+            only_hardlinks: false,
+            ancestor_id: None,
+            top_files_only: false,
+            top_dirs_only: false,
+            sort_field: Some(SortField::ApparentBytes),
+            descending: Some(true),
+            limit: Some(20),
+        },
+    );
+    assert_eq!(search_res.total_matched, 1);
+    assert_eq!(
+        search_res.items[0].rel_path_display,
+        "projects/app/target/debug/binary.bin"
+    );
+
+    // 7. Verify `Recover` mode 3-tier qualification (`GET /api/recover`)
+    let recover: RecoverReport = http_get_json(addr, "/api/recover?metric=allocated&limit=10");
+    assert!(recover.cache_and_temp_candidates.len() >= 2);
+
+    // `projects/app/target/debug` has no external hard links -> verified == detected_allocated
+    let cargo_cand = recover
+        .cache_and_temp_candidates
+        .iter()
+        .find(|c| c.entry.rel_path_display == "projects/app/target/debug")
+        .expect("cargo target/debug candidate detected");
+    assert!(cargo_cand.qualification.detected_allocated_bytes > 0);
+    assert_eq!(
+        cargo_cand.qualification.verified_recoverable_bytes,
+        cargo_cand.qualification.detected_allocated_bytes
+    );
+
+    // `.cache` contains `wheel_a.whl` (unshared) + `shared_ext.whl` (hard-linked outside root!)
+    // so verified_recoverable_bytes must be strictly less than detected_allocated_bytes!
+    let cache_cand = recover
+        .cache_and_temp_candidates
+        .iter()
+        .find(|c| c.entry.rel_path_display == ".cache")
+        .expect(".cache candidate detected");
+    assert!(
+        cache_cand.qualification.verified_recoverable_bytes
+            < cache_cand.qualification.detected_allocated_bytes,
+        "expected verified ({}) < detected ({}) due to external hard link in .cache",
+        cache_cand.qualification.verified_recoverable_bytes,
+        cache_cand.qualification.detected_allocated_bytes
+    );
+    assert!(cache_cand.qualification.verified_recoverable_bytes > 0);
+}
+
+fn write_file(path: &Path, size: usize) {
+    let mut f = File::create(path).unwrap();
+    if size > 0 {
+        f.write_all(&vec![b'X'; size]).unwrap();
+    }
+}
+
+fn http_get_raw(addr: std::net::SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        path
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).unwrap();
+    let (_, body) = buf.split_once("\r\n\r\n").unwrap();
+    body.to_string()
+}
+
+fn http_get_json<T: DeserializeOwned>(addr: std::net::SocketAddr, path: &str) -> T {
+    let body = http_get_raw(addr, path);
+    serde_json::from_str(&body).unwrap_or_else(|e| panic!("failed to parse JSON from {}: {}\nBody: {}", path, e, body))
+}
+
+fn http_post_json<B: Serialize, T: DeserializeOwned>(
+    addr: std::net::SocketAddr,
+    path: &str,
+    payload: &B,
+) -> T {
+    let json_bytes = serde_json::to_vec(payload).unwrap();
+    let mut stream = TcpStream::connect(addr).unwrap();
+    let req = format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        path,
+        json_bytes.len()
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    stream.write_all(&json_bytes).unwrap();
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).unwrap();
+    let (_, body) = buf.split_once("\r\n\r\n").unwrap();
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("failed to parse JSON from POST {}: {}\nBody: {}", path, e, body))
+}

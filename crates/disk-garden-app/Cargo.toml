@@ -1,0 +1,18 @@
+[package]
+name = "disk-garden-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop application host and UI server for DiskGarden"
+
+[[bin]]
+name = "disk-garden"
+path = "src/main.rs"
+
+[dependencies]
+disk-garden-core = { path = "../disk-garden-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

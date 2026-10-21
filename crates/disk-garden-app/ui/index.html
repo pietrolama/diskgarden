@@ -1,0 +1,1978 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DiskGarden — Analisi Spaziale e Monitoraggio Disco Linux</title>
+  <style>
+    :root, [data-theme="dark"] {
+      --bg-app: #0a0f12;
+      --bg-surface: #11191e;
+      --bg-elevated: #172229;
+      --bg-hover: #1e2d36;
+      --border-subtle: #243540;
+      --border-strong: #334b59;
+      --text-primary: #e7f1ed;
+      --text-secondary: #9cb2aa;
+      --text-muted: #687f77;
+      --accent: #2dd4bf;
+      --accent-dim: rgba(45, 212, 191, 0.14);
+      --dir-bg: #173142;
+      --dir-border: #38bdf8;
+      --dir-sub-bg: rgba(10, 22, 30, 0.58);
+      --file-bg: #16302d;
+      --file-border: #2dd4bf;
+      --bucket-bg: #1c262b;
+      --bucket-border: #64748b;
+      --warn: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.14);
+      --danger: #fb7185;
+      --danger-bg: rgba(251, 113, 133, 0.15);
+      --special: #818cf8;
+      --special-bg: rgba(129, 140, 248, 0.15);
+      --ok: #34d399;
+      --ok-bg: rgba(52, 211, 153, 0.14);
+      --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+    }
+
+    [data-theme="light"] {
+      --bg-app: #f3f7f5;
+      --bg-surface: #ffffff;
+      --bg-elevated: #eaf0ed;
+      --bg-hover: #dce7e2;
+      --border-subtle: #cbd9d3;
+      --border-strong: #9fb5ac;
+      --text-primary: #101b17;
+      --text-secondary: #3f544c;
+      --text-muted: #667b73;
+      --accent: #0d9488;
+      --accent-dim: rgba(13, 148, 136, 0.12);
+      --dir-bg: #e0f2fe;
+      --dir-border: #0284c7;
+      --dir-sub-bg: rgba(255, 255, 255, 0.65);
+      --file-bg: #ccfbf1;
+      --file-border: #0d9488;
+      --bucket-bg: #f1f5f9;
+      --bucket-border: #64748b;
+      --warn: #d97706;
+      --warn-bg: rgba(217, 119, 6, 0.12);
+      --danger: #e11d48;
+      --danger-bg: rgba(225, 29, 72, 0.11);
+      --special: #4f46e5;
+      --special-bg: rgba(79, 70, 229, 0.11);
+      --ok: #059669;
+      --ok-bg: rgba(5, 150, 105, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-app);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13.5px;
+      line-height: 1.42;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Header */
+    header.top-bar {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 9px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+    .brand-mark {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .scan-controls {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 1;
+      max-width: 680px;
+    }
+    input.text-input, select.select-input {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12.5px;
+      outline: none;
+    }
+    input.text-input:focus, select.select-input:focus {
+      border-color: var(--accent);
+    }
+    .path-input {
+      flex: 1;
+      font-family: var(--font-mono);
+      min-width: 200px;
+    }
+    .chk-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
+    }
+    button.btn {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      padding: 6px 11px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 100ms ease, border-color 100ms ease;
+    }
+    button.btn:hover:not(:disabled) {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+    button.btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    button.btn-primary {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    button.btn-danger {
+      background: var(--danger-bg);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    .mode-tabs {
+      display: flex;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 7px;
+      padding: 2px;
+      gap: 3px;
+    }
+    .mode-tab {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      padding: 5px 12px;
+      border-radius: 5px;
+      font-weight: 600;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .mode-tab.active {
+      background: var(--accent);
+      color: #05201c;
+    }
+
+    /* Disk Volumes Bar */
+    .volumes-bar {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 7px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow-x: auto;
+    }
+    .vol-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 7px;
+      padding: 5px 11px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 100ms ease, background 100ms ease;
+    }
+    .vol-card:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+    .vol-card.active {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .vol-gauge {
+      width: 68px;
+      height: 7px;
+      background: var(--bg-app);
+      border-radius: 99px;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+    }
+    .vol-gauge-fill {
+      height: 100%;
+      background: var(--accent);
+    }
+
+    /* Status / Progress Banner */
+    .status-strip {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 6px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+    }
+    .badge-ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); }
+    .badge-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
+    .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+    .badge-special { background: var(--special-bg); color: var(--special); border: 1px solid var(--special); }
+
+    /* Workspace Layout */
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 375px;
+      min-height: 0;
+    }
+    .center-pane {
+      display: flex;
+      flex-direction: column;
+      padding: 12px 16px;
+      gap: 10px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .nav-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .crumb {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      padding: 3px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .crumb:hover { border-color: var(--accent); }
+    .crumb.active {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      font-weight: 700;
+    }
+
+    /* Visualization Box (Treemap / Sunburst) */
+    .viz-box {
+      height: 310px;
+      min-height: 230px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 6px;
+      position: relative;
+      overflow: hidden;
+    }
+    .treemap-canvas {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    .tm-tile {
+      position: absolute;
+      border-radius: 5px;
+      padding: 5px 7px;
+      overflow: hidden;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      user-select: none;
+      transition: box-shadow 80ms ease;
+    }
+    .tm-tile:hover {
+      z-index: 5;
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+    .tm-tile.selected {
+      z-index: 6;
+      box-shadow: 0 0 0 2.5px var(--text-primary);
+    }
+    .tm-tile.kind-directory {
+      background: var(--dir-bg);
+      border: 1.5px solid var(--dir-border);
+    }
+    .tm-tile.kind-file {
+      background: var(--file-bg);
+      border: 1.5px solid var(--file-border);
+    }
+    .tm-tile.kind-bucket {
+      background: var(--bucket-bg);
+      border: 1.5px dashed var(--bucket-border);
+    }
+    .tm-tile.kind-error {
+      background: var(--danger-bg);
+      border: 1.5px dotted var(--danger);
+    }
+    .tm-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 4px;
+      z-index: 2;
+    }
+    .tm-label {
+      font-weight: 600;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tm-sub-stage {
+      position: relative;
+      flex: 1;
+      margin: 4px 0 2px 0;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .tm-subtile {
+      position: absolute;
+      background: var(--dir-sub-bg);
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      border-radius: 2px;
+      padding: 2px 4px;
+      font-size: 10px;
+      color: var(--text-secondary);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .tm-footer {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 2;
+    }
+
+    /* Filter & Search Bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 7px;
+      padding: 7px 10px;
+    }
+    .chip-group {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .chip {
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      padding: 4px 9px;
+      border-radius: 99px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .chip.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Data Table */
+    .table-container {
+      flex: 1;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      overflow: auto;
+      min-height: 140px;
+    }
+    table.entries-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    table.entries-table th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-subtle);
+      z-index: 3;
+      cursor: pointer;
+      user-select: none;
+    }
+    table.entries-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: middle;
+    }
+    table.entries-table tr { cursor: pointer; }
+    table.entries-table tr:hover { background: var(--bg-hover); }
+    table.entries-table tr.selected { background: var(--accent-dim); }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+    .bar-track {
+      width: 72px;
+      height: 6px;
+      background: var(--bg-elevated);
+      border-radius: 99px;
+      overflow: hidden;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .bar-fill {
+      height: 100%;
+      background: var(--accent);
+    }
+
+    /* Inspector Panel */
+    aside.inspector {
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-subtle);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+    }
+    .insp-title {
+      font-size: 15px;
+      font-weight: 700;
+      word-break: break-all;
+      margin-top: 2px;
+    }
+    .insp-path {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 6px 8px;
+      border-radius: 5px;
+      word-break: break-all;
+    }
+    .metric-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .metric-card .lbl {
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .metric-card .val {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .metric-card .sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .insp-section {
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .insp-section h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+      margin-bottom: 2px;
+    }
+    .kv {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .kv span:first-child { color: var(--text-secondary); }
+
+    /* Modal Directory Picker */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      width: 620px;
+      max-width: 94vw;
+      max-height: 82vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    }
+    .modal-header, .modal-footer {
+      padding: 12px 16px;
+      background: var(--bg-elevated);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .modal-body {
+      padding: 12px 16px;
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .dir-list-item {
+      padding: 7px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+    .dir-list-item:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- Area Superiore -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span>DiskGarden</span>
+    </div>
+
+    <div class="scan-controls">
+      <input
+        type="text"
+        id="root-input"
+        class="text-input path-input"
+        placeholder="/percorso/directory/da/analizzare"
+        aria-label="Percorso directory radice"
+      />
+      <button class="btn" onclick="openDirBrowserModal()" title="Sfoglia cartelle del sistema">Sfoglia…</button>
+      <label class="chk-label" title="Segue i link simbolici (con protezione cicli attiva)">
+        <input type="checkbox" id="chk-symlinks" /> Segui symlink
+      </label>
+      <label class="chk-label" title="Attraversa mount point su altri filesystem">
+        <input type="checkbox" id="chk-mounts" /> Altri mount
+      </label>
+      <button class="btn btn-primary" id="btn-scan" onclick="triggerStartScan()">Scansiona</button>
+      <button class="btn btn-danger hidden" id="btn-cancel" onclick="triggerCancelScan()">Annulla</button>
+    </div>
+
+    <nav class="mode-tabs" aria-label="Modalità di lavoro">
+      <button class="mode-tab active" id="tab-explore" onclick="switchMode('explore')">Explore</button>
+      <button class="mode-tab" id="tab-recover" onclick="switchMode('recover')">Recover</button>
+      <button class="mode-tab" id="tab-history" onclick="switchMode('history')">History</button>
+    </nav>
+
+    <div style="display:flex; gap:6px; align-items:center;">
+      <button class="btn" id="btn-metric" onclick="toggleSizeMetric()" title="Commuta tra spazio fisico allocato (st_blocks) e spazio logico apparente (st_size)">
+        Metrica: Allocata
+      </button>
+      <button class="btn" onclick="toggleTheme()" title="Commuta tema scuro/chiaro">Tema</button>
+    </div>
+  </header>
+
+  <!-- Barra Volumi e Capacità Disco -->
+  <div class="volumes-bar" id="volumes-bar" aria-label="Volumi e Dischi del Sistema">
+    <span style="font-size:11.5px; font-weight:600; color:var(--text-secondary);">Dischi e Volumi:</span>
+    <div id="volumes-list" style="display:flex; gap:8px; align-items:center;"></div>
+  </div>
+
+  <!-- Barra Stato e Progressione Scansione -->
+  <div class="status-strip" id="status-strip">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span id="scan-status-badge" class="badge badge-warn">In attesa</span>
+      <span id="scan-status-text">Seleziona una directory e avvia la scansione.</span>
+    </div>
+    <div class="mono" id="scan-totals-summary" style="color:var(--text-secondary);"></div>
+  </div>
+
+  <!-- Area Principale + Inspector -->
+  <div class="workspace">
+    <!-- COLONNA CENTRALE -->
+    <main class="center-pane">
+      <!-- MODALITÀ 1: EXPLORE -->
+      <section id="pane-explore" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
+        <div class="nav-bar">
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <button class="btn" id="btn-up" onclick="navigateUp()" disabled title="Salire alla directory genitore (Backspace)">↑ Su</button>
+            <div class="breadcrumbs" id="breadcrumbs-bar"></div>
+          </div>
+          <div style="display:flex; gap:5px; align-items:center;">
+            <button class="btn btn-primary" id="viz-treemap-btn" onclick="setVizMode('treemap')">Treemap Squarified</button>
+            <button class="btn" id="viz-sunburst-btn" onclick="setVizMode('sunburst')">Radiale</button>
+            <button class="btn" id="viz-ext-btn" onclick="setVizMode('extensions')">Per Estensione</button>
+          </div>
+        </div>
+
+        <!-- Visualizzazione Grafica Occupazione -->
+        <div class="viz-box">
+          <div class="treemap-canvas" id="viz-canvas"></div>
+        </div>
+
+        <!-- Ricerca, Filtri e Ordinamento -->
+        <div class="filter-bar">
+          <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:240px;">
+            <input
+              type="search"
+              id="search-input"
+              class="text-input"
+              style="flex:1;"
+              placeholder="Cerca file o directory per nome o percorso…"
+              oninput="onSearchOrFilterChanged()"
+            />
+            <select id="search-scope" class="select-input" onchange="onSearchOrFilterChanged()">
+              <option value="current">Cartella corrente (figli)</option>
+              <option value="subtree">Sottoalbero corrente</option>
+              <option value="global">Tutta la scansione</option>
+            </select>
+          </div>
+
+          <div class="chip-group">
+            <button class="chip active" id="flt-all" onclick="setQuickFilter('all')">Tutti</button>
+            <button class="chip" id="flt-top-files" onclick="setQuickFilter('top_files')">Top File Grandi</button>
+            <button class="chip" id="flt-top-dirs" onclick="setQuickFilter('top_dirs')">Top Directory</button>
+            <button class="chip" id="flt-errors" onclick="setQuickFilter('errors')">Errori Accesso</button>
+            <button class="chip" id="flt-sparse" onclick="setQuickFilter('sparse')">File Sparsi</button>
+            <button class="chip" id="flt-hardlinks" onclick="setQuickFilter('hardlinks')">Hard Link</button>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:5px;">
+            <select id="sort-field" class="select-input" onchange="onSortChanged()">
+              <option value="allocated_bytes">Ordina: Dim. Allocata</option>
+              <option value="apparent_bytes">Ordina: Dim. Apparente</option>
+              <option value="name">Ordina: Nome</option>
+              <option value="files_count">Ordina: N. File</option>
+              <option value="modified_time">Ordina: Data Modifica</option>
+            </select>
+            <button class="btn" id="btn-sort-dir" onclick="toggleSortDirection()" title="Inverti ordine crescente/decrescente">↓ Desc</button>
+          </div>
+        </div>
+
+        <!-- Tabella Elementi -->
+        <div class="table-container">
+          <table class="entries-table" aria-label="Elenco elementi analizzati">
+            <thead>
+              <tr>
+                <th>Nome / Percorso</th>
+                <th>Tipo</th>
+                <th>Dim. Allocata</th>
+                <th>Dim. Apparente</th>
+                <th>Contenuto</th>
+                <th>Stato & Flag</th>
+                <th>Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="entries-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- MODALITÀ 2: RECOVER -->
+      <section id="pane-recover" class="hidden" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
+        <div style="background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:8px; padding:12px 14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div>
+            <h3 style="font-size:14.5px;">Individuazione Consapevole dello Spazio Recuperabile (Solo revisione)</h3>
+            <p style="font-size:12px; color:var(--text-secondary);">
+              Nessuna cancellazione automatica. Ogni elemento distingue tra spazio occupato rilevato, spazio potenzialmente recuperabile (regole trasparenti) e spazio verificato (al netto di hard link esterni e directory con errori).
+            </p>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <div class="metric-card">
+              <div class="lbl">1. Occupato Rilevato</div>
+              <div class="val" id="rec-tot-detected">0 B</div>
+            </div>
+            <div class="metric-card">
+              <div class="lbl">2. Potenzialmente Recuperabile</div>
+              <div class="val" style="color:var(--warn);" id="rec-tot-potential">0 B</div>
+            </div>
+            <div class="metric-card">
+              <div class="lbl">3. Recuperabile Verificato</div>
+              <div class="val" style="color:var(--ok);" id="rec-tot-verified">0 B</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <table class="entries-table">
+            <thead>
+              <tr>
+                <th>Percorso relativo</th>
+                <th>Categoria / Regola Riconosciuta</th>
+                <th>1. Occupato Rilevato</th>
+                <th>2. Potenzialmente Rec.</th>
+                <th>3. Verificato su Disco</th>
+                <th>Spiegazione Tecnica</th>
+                <th>Esplora</th>
+              </tr>
+            </thead>
+            <tbody id="recover-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- MODALITÀ 3: HISTORY (Placeholder strutturato per Milestone 3) -->
+      <section id="pane-history" class="hidden" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
+        <div style="background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:8px; padding:24px; text-align:center; margin:auto; max-width:560px;">
+          <span class="badge badge-special">Milestone 3 — SnapshotStore & DiffEngine</span>
+          <h3 style="margin-top:10px; font-size:16px;">Memoria Temporale e Confronto Snapshot</h3>
+          <p style="margin-top:8px; color:var(--text-secondary); font-size:13px;">
+            La persistenza locale su SQLite (<code>SnapshotStore</code>) e il motore di confronto tra due scansioni (<code>DiffEngine</code>) costituiscono la <strong>Milestone 3</strong> della roadmap esecutiva.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- PANNELLO INFORMATIVO LATERALE (INSPECTOR) -->
+    <aside class="inspector" aria-label="Dettagli elemento selezionato">
+      <div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span class="badge badge-ok" id="insp-type-badge">NESSUNA SELEZIONE</span>
+          <span class="badge badge-warn hidden" id="insp-utf8-badge">Byte Non-UTF-8</span>
+        </div>
+        <div class="insp-title" id="insp-name">—</div>
+      </div>
+
+      <div class="insp-path" id="insp-abs-path">Seleziona una directory o un file nella Treemap o nella tabella.</div>
+
+      <div class="metric-cards">
+        <div class="metric-card">
+          <div class="lbl">Dimensione Allocata</div>
+          <div class="val" id="insp-allocated">—</div>
+          <div class="sub" id="insp-allocated-share">Blocchi fisici (st_blocks)</div>
+        </div>
+        <div class="metric-card">
+          <div class="lbl">Dimensione Apparente</div>
+          <div class="val" id="insp-apparent">—</div>
+          <div class="sub" id="insp-apparent-share">Byte logici (st_size)</div>
+        </div>
+      </div>
+
+      <div class="insp-section">
+        <h4>Metadati e Conteggi</h4>
+        <div class="kv"><span>Stato accesso:</span><strong id="insp-access-status">—</strong></div>
+        <div class="kv"><span>File nel sottoalbero:</span><span class="mono" id="insp-files-cnt">—</span></div>
+        <div class="kv"><span>Sottodirectory:</span><span class="mono" id="insp-dirs-cnt">—</span></div>
+        <div class="kv"><span>Link simbolici:</span><span class="mono" id="insp-symlinks-cnt">—</span></div>
+        <div class="kv"><span>File diretti (solo dir):</span><span class="mono" id="insp-direct-bytes">—</span></div>
+        <div class="kv"><span>Errori nel sottoalbero:</span><span class="mono" id="insp-errors-cnt">—</span></div>
+        <div class="kv"><span>Ultima modifica:</span><span class="mono" id="insp-mtime">—</span></div>
+        <div class="kv"><span>Inode / Device:</span><span class="mono" id="insp-inode">—</span></div>
+        <div class="kv"><span>Hard link / Sparse:</span><span class="mono" id="insp-special-flags">—</span></div>
+      </div>
+
+      <div class="insp-section">
+        <h4>Qualifica Spazio (Recover 3-Tier)</h4>
+        <div class="kv"><span>Categoria:</span><strong id="insp-qual-cat">—</strong></div>
+        <div class="kv"><span>1. Occupato rilevato:</span><span class="mono" id="insp-qual-det">—</span></div>
+        <div class="kv"><span>2. Potenzialmente rec.:</span><span class="mono" id="insp-qual-pot">—</span></div>
+        <div class="kv"><span>3. Verificato su disco:</span><span class="mono" id="insp-qual-ver">—</span></div>
+        <div style="font-size:11.5px; color:var(--text-secondary); margin-top:3px;" id="insp-qual-note"></div>
+      </div>
+
+      <div class="insp-section">
+        <h4>Azioni Non Distruttive</h4>
+        <button class="btn btn-primary hidden" id="btn-insp-enter" onclick="enterSelectedDirectory()" style="width:100%; text-align:left;">
+          ↵ Entra nella directory selezionata
+        </button>
+        <button class="btn hidden" id="btn-insp-parent" onclick="navigateToSelectedParent()" style="width:100%; text-align:left;">
+          ↑ Vai alla directory contenitore in Explore
+        </button>
+        <button class="btn" id="btn-insp-reveal" onclick="revealSelectedInFileManager()" disabled style="width:100%; text-align:left;">
+          Apri nel File Manager di sistema (xdg-open)
+        </button>
+        <button class="btn" id="btn-insp-copy" onclick="copySelectedPath()" disabled style="width:100%; text-align:left;">
+          Copia percorso assoluto negli appunti
+        </button>
+        <div id="insp-action-feedback" style="font-size:11.5px; color:var(--accent);"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Modal Selettore Directory -->
+  <div class="modal-backdrop hidden" id="dir-modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dir-modal-title">
+      <div class="modal-header">
+        <strong id="dir-modal-title">Seleziona Directory da Analizzare</strong>
+        <div style="display:flex; gap:6px;">
+          <button class="btn" onclick="tryNativePicker()">Dialogo Nativo OS (kdialog/zenity)</button>
+          <button class="btn" onclick="closeDirBrowserModal()">Chiudi ✕</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="btn" id="modal-up-btn" onclick="browseModalParent()">↑ Cartella Superiore</button>
+          <input type="text" id="modal-current-path" class="text-input path-input" readonly />
+        </div>
+        <div id="modal-error" style="color:var(--danger); font-size:12px;"></div>
+        <div id="modal-dirs-list" style="display:flex; flex-direction:column; gap:5px;"></div>
+      </div>
+      <div class="modal-footer">
+        <span style="font-size:12px; color:var(--text-secondary);">Doppio clic per entrare in una sottocartella, oppure conferma il percorso corrente.</span>
+        <button class="btn btn-primary" onclick="confirmModalDirectory()">Scansiona questa directory</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let appState = {
+      isScanning: false,
+      activeScanRoot: null,
+      progress: null,
+      volumes: [],
+      scanOverview: null,
+      currentDirId: null,
+      currentDirView: null,
+      selectedEntryId: null,
+      selectedDetail: null,
+      metric: "allocated", // "allocated" | "apparent"
+      vizMode: "treemap",  // "treemap" | "sunburst" | "extensions"
+      quickFilter: "all",  // "all" | "top_files" | "top_dirs" | "errors" | "sparse" | "hardlinks" | "bucket"
+      sortField: "allocated_bytes",
+      sortDesc: true,
+      extensionStats: [],
+      activeBucketTile: null,
+      modalParentPath: null
+    };
+
+    let pollTimer = null;
+
+    function formatBytes(bytes) {
+      if (bytes === null || bytes === undefined) return "—";
+      const k = 1024;
+      if (bytes >= k * k * k) return (bytes / (k * k * k)).toFixed(2) + " GiB";
+      if (bytes >= k * k) return (bytes / (k * k)).toFixed(2) + " MiB";
+      if (bytes >= k) return (bytes / k).toFixed(2) + " KiB";
+      return bytes + " B";
+    }
+
+    function formatBytesWithRaw(bytes) {
+      if (bytes === null || bytes === undefined) return "—";
+      if (bytes < 1024) return `${bytes} B`;
+      return `${formatBytes(bytes)} (${bytes.toLocaleString("it-IT")} B)`;
+    }
+
+    function formatTimestamp(sec) {
+      if (!sec && sec !== 0) return "N/D";
+      try {
+        const d = new Date(sec * 1000);
+        return d.toISOString().replace("T", " ").slice(0, 19);
+      } catch (_) {
+        return "N/D";
+      }
+    }
+
+    function effectiveBytesOf(item) {
+      if (item.entry_type === "directory") {
+        return appState.metric === "apparent" ? item.subtree_apparent_bytes : item.subtree_allocated_bytes;
+      }
+      return appState.metric === "apparent" ? item.apparent_bytes : item.allocated_bytes;
+    }
+
+    function tileEffectiveBytes(tile) {
+      return appState.metric === "apparent" ? tile.apparent_bytes : tile.allocated_bytes;
+    }
+
+    async function apiGet(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    async function apiPost(url, bodyObj) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyObj || {})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    async function initApp() {
+      try {
+        const st = await apiGet("/api/state");
+        const rootInput = document.getElementById("root-input");
+        if (st.active_scan_root) {
+          rootInput.value = st.active_scan_root;
+        } else if (st.scan_overview && st.scan_overview.root_path_display) {
+          rootInput.value = st.scan_overview.root_path_display;
+        } else if (st.default_cwd) {
+          rootInput.value = st.default_cwd;
+        }
+        await refreshAppState();
+      } catch (e) {
+        console.error("Init error:", e);
+      }
+    }
+
+    async function refreshAppState() {
+      try {
+        const st = await apiGet("/api/state");
+        const wasScanning = appState.isScanning;
+        appState.isScanning = st.is_scanning;
+        appState.activeScanRoot = st.active_scan_root || null;
+        appState.progress = st.progress || null;
+        appState.volumes = st.volumes || [];
+        appState.scanOverview = st.scan_overview;
+
+        renderVolumesBar(st);
+        renderStatusBar(st);
+
+        if (st.is_scanning) {
+          renderScanningLiveOverlay(st);
+          if (!pollTimer) {
+            pollTimer = setInterval(refreshAppState, 160);
+          }
+        } else {
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          if ((wasScanning || !appState.currentDirView) && st.scan_overview && st.scan_overview.root_id !== null) {
+            appState.currentDirId = st.scan_overview.root_id;
+            await loadDirectoryView(appState.currentDirId, true);
+          }
+        }
+      } catch (e) {
+        console.error("State poll error:", e);
+      }
+    }
+
+    function renderVolumesBar(st) {
+      const container = document.getElementById("volumes-list");
+      if (!container) return;
+      const vols = st.volumes || [];
+      const currentTarget = st.active_scan_root
+        || (st.scan_overview && st.scan_overview.root_path_display)
+        || document.getElementById("root-input").value.trim()
+        || "/";
+
+      container.innerHTML = "";
+      vols.forEach(v => {
+        const usedPct = v.total_bytes > 0 ? Math.min(100, Math.round((v.used_bytes / v.total_bytes) * 100)) : 0;
+        const btn = document.createElement("div");
+        btn.className = "vol-card" + (currentTarget === v.mount_point ? " active" : "");
+        btn.title = `${v.device} (${v.fs_type}) montato su ${v.mount_point} — Usati ${formatBytes(v.used_bytes)} su ${formatBytes(v.total_bytes)} (Liberi: ${formatBytes(v.available_bytes)})`;
+        btn.onclick = () => {
+          document.getElementById("root-input").value = v.mount_point;
+          triggerStartScan();
+        };
+        const icon = v.mount_point === "/" ? "💿" : (v.fs_type === "home" ? "🏠" : "🖴");
+        btn.innerHTML = `
+          <span style="font-weight:700; font-size:12px;">${icon} ${escapeHtml(v.label)}</span>
+          <div class="vol-gauge"><div class="vol-gauge-fill" style="width:${usedPct}%;"></div></div>
+          <span class="mono" style="font-size:11px; color:var(--text-secondary);">
+            <strong>${formatBytes(v.used_bytes)}</strong> / ${formatBytes(v.total_bytes)} (${usedPct}% — liberi ${formatBytes(v.available_bytes)})
+          </span>
+        `;
+        container.appendChild(btn);
+      });
+    }
+
+    function renderScanningLiveOverlay(st) {
+      const canvas = document.getElementById("viz-canvas");
+      if (!canvas) return;
+      const p = st.progress || {};
+      const rootTarget = st.active_scan_root || "/";
+      // Find matching volume to estimate percentage against used disk space
+      const vols = st.volumes || [];
+      const matchingVol = vols.find(v => v.mount_point === rootTarget) || vols.find(v => v.mount_point === "/") || null;
+      const usedBytes = matchingVol && matchingVol.used_bytes > 0 ? matchingVol.used_bytes : 0;
+      const scannedAlloc = p.allocated_bytes_so_far || 0;
+      const pct = usedBytes > 0 ? Math.min(99, Math.round((scannedAlloc / usedBytes) * 100)) : 0;
+
+      canvas.innerHTML = `
+        <div style="display:flex; flex-direction:column; height:100%; align-items:center; justify-content:center; gap:14px; padding:24px; text-align:center;">
+          <div style="font-size:15px; font-weight:700; color:var(--accent);">
+            Scansione in corso su <span class="mono">${escapeHtml(rootTarget)}</span>…
+          </div>
+          <div style="width:min(520px, 90%); height:12px; background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:99px; overflow:hidden;">
+            <div style="height:100%; width:${usedBytes > 0 ? Math.max(3, pct) : 35}%; background:var(--accent); transition:width 150ms linear;"></div>
+          </div>
+          <div class="mono" style="font-size:13px; color:var(--text-primary);">
+            <strong>${formatBytes(scannedAlloc)}</strong> rilevati${usedBytes > 0 ? ` su ~${formatBytes(usedBytes)} occupati sul disco (${pct}%)` : ""}
+          </div>
+          <div class="mono" style="font-size:12px; color:var(--text-secondary);">
+            ${(p.files_scanned || 0).toLocaleString("it-IT")} file &bull; ${(p.dirs_scanned || 0).toLocaleString("it-IT")} directory &bull; ${(p.symlinks_scanned || 0).toLocaleString("it-IT")} symlink &bull; ${p.errors_count || 0} dir protette (${((p.elapsed_ms || 0) / 1000).toFixed(1)} s)
+          </div>
+          <div class="mono" style="font-size:11.5px; color:var(--text-muted); max-width:680px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            /${escapeHtml(p.current_rel_path || "")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderStatusBar(st) {
+      const badge = document.getElementById("scan-status-badge");
+      const text = document.getElementById("scan-status-text");
+      const summary = document.getElementById("scan-totals-summary");
+      const btnScan = document.getElementById("btn-scan");
+      const btnCancel = document.getElementById("btn-cancel");
+
+      if (st.is_scanning) {
+        btnScan.classList.add("hidden");
+        btnCancel.classList.remove("hidden");
+        badge.className = "badge badge-warn";
+        badge.textContent = "SCANSIONE IN CORSO";
+        const p = st.progress || {};
+        text.textContent = `Esplorazione: ${p.current_rel_path || "/"} (${p.elapsed_ms || 0} ms)`;
+        summary.textContent = `${p.files_scanned || 0} file | ${p.dirs_scanned || 0} dir | Allocato: ${formatBytes(p.allocated_bytes_so_far || 0)} | Errori: ${p.errors_count || 0}`;
+        return;
+      }
+
+      btnScan.classList.remove("hidden");
+      btnCancel.classList.add("hidden");
+
+      const ov = st.scan_overview;
+      if (!ov) {
+        badge.className = "badge badge-warn";
+        badge.textContent = "PRONTO";
+        text.textContent = "Nessuna scansione attiva. Scegli una directory e premi Scansiona.";
+        summary.textContent = "";
+        return;
+      }
+
+      if (ov.status === "completed") {
+        badge.className = "badge badge-ok";
+        badge.textContent = "COMPLETA";
+        text.textContent = `Radice: ${ov.root_path_display} (${ov.duration_ms} ms)`;
+      } else if (ov.status === "partial") {
+        badge.className = "badge badge-warn";
+        badge.textContent = `PARZIALE (${ov.permission_denied_count + ov.io_errors_count} avvisi accesso)`;
+        text.textContent = `Radice: ${ov.root_path_display} — ${ov.unreadable_dirs_count} directory non leggibili (non trattate come vuote)`;
+      } else if (ov.status === "cancelled") {
+        badge.className = "badge badge-danger";
+        badge.textContent = "ANNULLATA";
+        text.textContent = `Scansione interrotta dall'utente su ${ov.root_path_display} (dati parziali non completi)`;
+      } else {
+        badge.className = "badge badge-danger";
+        badge.textContent = "FALLITA";
+        text.textContent = ov.root_error_message || "Impossibile accedere alla directory radice.";
+      }
+
+      let hlNote = ov.hardlink_duplicate_files_count > 0
+        ? ` | HardLink dedup: -${formatBytes(ov.hardlink_saved_allocated_bytes)}`
+        : "";
+      summary.textContent = `Allocato: ${formatBytes(ov.total_allocated_bytes)} | Apparente: ${formatBytes(ov.total_apparent_bytes)} | ${ov.total_files_count} file, ${ov.total_dirs_count} dir, ${ov.total_symlinks_count} symlink${hlNote}`;
+    }
+
+    async function triggerStartScan() {
+      const rootPath = document.getElementById("root-input").value.trim();
+      if (!rootPath) return;
+      const followSymlinks = document.getElementById("chk-symlinks").checked;
+      const crossMounts = document.getElementById("chk-mounts").checked;
+      appState.currentDirView = null;
+      appState.quickFilter = "all";
+      updateQuickFilterChips();
+      await apiPost("/api/scan/start", {
+        root_path: rootPath,
+        follow_symlinks: followSymlinks,
+        cross_mounts: crossMounts
+      });
+      await refreshAppState();
+    }
+
+    async function triggerCancelScan() {
+      await apiPost("/api/scan/cancel", {});
+      await refreshAppState();
+    }
+
+    async function loadDirectoryView(dirId, selectDirItself = false) {
+      if (dirId === null || dirId === undefined) return;
+      appState.currentDirId = dirId;
+      appState.activeBucketTile = null;
+      const url = `/api/explore/dir?id=${dirId}&sort=${appState.sortField}&desc=${appState.sortDesc}&metric=${appState.metric}&max_tiles=46&limit=500`;
+      const view = await apiGet(url);
+      appState.currentDirView = view;
+
+      document.getElementById("btn-up").disabled = (view.directory.parent_id === null || view.directory.parent_id === undefined);
+      renderBreadcrumbs(view.breadcrumbs);
+      renderVisualization();
+
+      if (appState.quickFilter === "all" && !document.getElementById("search-input").value.trim()) {
+        renderEntriesTable(view.children, view.directory);
+      } else {
+        await runSearchAndFilter();
+      }
+
+      if (selectDirItself || appState.selectedEntryId === null) {
+        await selectEntry(view.directory.id);
+      }
+    }
+
+    function renderBreadcrumbs(crumbs) {
+      const bar = document.getElementById("breadcrumbs-bar");
+      bar.innerHTML = "";
+      crumbs.forEach((c, idx) => {
+        const btn = document.createElement("button");
+        btn.className = "crumb" + (idx === crumbs.length - 1 ? " active" : "");
+        btn.textContent = c.depth === 0 ? c.name_display : c.name_display;
+        btn.title = c.rel_path_display || c.name_display;
+        btn.onclick = () => {
+          appState.quickFilter = "all";
+          document.getElementById("search-input").value = "";
+          updateQuickFilterChips();
+          loadDirectoryView(c.id, true);
+        };
+        bar.appendChild(btn);
+        if (idx < crumbs.length - 1) {
+          const sep = document.createElement("span");
+          sep.style.color = "var(--text-muted)";
+          sep.textContent = "/";
+          bar.appendChild(sep);
+        }
+      });
+    }
+
+    async function navigateUp() {
+      if (!appState.currentDirView) return;
+      const pid = appState.currentDirView.directory.parent_id;
+      if (pid !== null && pid !== undefined) {
+        appState.quickFilter = "all";
+        updateQuickFilterChips();
+        await loadDirectoryView(pid, true);
+      }
+    }
+
+    // Squarified Treemap layout (Bruls, Huizing, van Wijk)
+    function computeSquarifiedLayout(items, x, y, w, h, valueFn) {
+      const positive = items.filter(it => valueFn(it) > 0);
+      const zeroItems = items.filter(it => valueFn(it) <= 0);
+      if (positive.length === 0) {
+        // Equal grid fallback when directory only contains 0-byte items or unreadable dirs
+        const n = items.length;
+        if (n === 0) return [];
+        const cellW = w / n;
+        return items.map((item, i) => ({ item, x: x + i * cellW, y, w: Math.max(18, cellW - 3), h }));
+      }
+
+      // Reserve a small strip if there are zero-byte / PermissionDenied items so they remain selectable!
+      let mainW = w, mainH = h;
+      let zeroRects = [];
+      if (zeroItems.length > 0 && w > 120 && h > 80) {
+        const stripH = Math.min(34, Math.max(24, Math.round(h * 0.14)));
+        mainH = h - stripH - 4;
+        const cellW = w / zeroItems.length;
+        zeroRects = zeroItems.map((item, i) => ({
+          item,
+          x: x + i * cellW,
+          y: y + mainH + 4,
+          w: Math.max(24, cellW - 3),
+          h: stripH
+        }));
+      }
+
+      const rects = sliceLayout(positive, x, y, mainW, mainH, valueFn);
+      return rects.concat(zeroRects);
+    }
+
+    function sliceLayout(items, x, y, w, h, valueFn) {
+      if (!items.length || w <= 2 || h <= 2) return [];
+      if (items.length === 1) {
+        return [{ item: items[0], x, y, w, h }];
+      }
+      const total = items.reduce((acc, it) => acc + valueFn(it), 0);
+      if (total <= 0) return [];
+
+      let sum = 0;
+      let split = 1;
+      for (let i = 0; i < items.length - 1; i++) {
+        sum += valueFn(items[i]);
+        if (sum >= total * 0.45) {
+          split = i + 1;
+          break;
+        }
+      }
+      const left = items.slice(0, split);
+      const right = items.slice(split);
+      const leftSum = left.reduce((acc, it) => acc + valueFn(it), 0);
+      const ratio = leftSum / total;
+
+      if (w >= h) {
+        const lw = Math.round(w * ratio);
+        return [
+          ...sliceLayout(left, x, y, Math.max(0, lw - 2), h, valueFn),
+          ...sliceLayout(right, x + lw + 2, y, Math.max(0, w - lw - 2), h, valueFn)
+        ];
+      } else {
+        const lh = Math.round(h * ratio);
+        return [
+          ...sliceLayout(left, x, y, w, Math.max(0, lh - 2), valueFn),
+          ...sliceLayout(right, x, y + lh + 2, w, Math.max(0, h - lh - 2), valueFn)
+        ];
+      }
+    }
+
+    function renderVisualization() {
+      const canvas = document.getElementById("viz-canvas");
+      canvas.innerHTML = "";
+      if (!appState.currentDirView) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const W = rect.width || 760;
+      const H = rect.height || 295;
+      const tiles = appState.currentDirView.treemap_tiles || [];
+
+      if (tiles.length === 0) {
+        canvas.innerHTML = `<div style="display:flex; height:100%; align-items:center; justify-content:center; color:var(--text-secondary);">Directory vuota (0 elementi).</div>`;
+        return;
+      }
+
+      if (appState.vizMode === "treemap") {
+        const boxes = computeSquarifiedLayout(tiles, 0, 0, W, H, tileEffectiveBytes);
+        boxes.forEach(({ item: tile, x, y, w, h }) => {
+          const el = document.createElement("div");
+          let kindClass = "kind-file";
+          if (tile.is_tail_bucket) kindClass = "kind-bucket";
+          else if (tile.access_status === "permission_denied" || tile.access_status === "io_error") kindClass = "kind-error";
+          else if (tile.entry_type === "directory") kindClass = "kind-directory";
+
+          const isSelected = (tile.entry_id !== null && tile.entry_id === appState.selectedEntryId) ||
+                             (tile.is_tail_bucket && appState.activeBucketTile === tile);
+          el.className = `tm-tile ${kindClass}` + (isSelected ? " selected" : "");
+          el.style.left = `${x}px`;
+          el.style.top = `${y}px`;
+          el.style.width = `${Math.max(16, w)}px`;
+          el.style.height = `${Math.max(16, h)}px`;
+          el.tabIndex = 0;
+
+          const sizeBytes = tileEffectiveBytes(tile);
+          const pct = (tile.fraction_of_parent * 100).toFixed(1) + "%";
+          const errBadge = (tile.access_status === "permission_denied")
+            ? `<span class="badge badge-danger" style="font-size:9.5px; padding:0 4px;">EACCES</span>`
+            : (tile.subtree_error_count > 0 ? `<span class="badge badge-warn" style="font-size:9.5px; padding:0 4px;">!${tile.subtree_error_count}</span>` : "");
+
+          const headerHtml = `
+            <div class="tm-header">
+              <span class="tm-label">${escapeHtml(tile.label)}</span>
+              ${errBadge}
+            </div>
+          `;
+
+          const footerHtml = (h >= 38 && w >= 68) ? `
+            <div class="tm-footer">
+              <span>${formatBytes(sizeBytes)}</span>
+              <span>${pct}</span>
+            </div>
+          ` : "";
+
+          el.innerHTML = headerHtml + `<div class="tm-sub-stage"></div>` + footerHtml;
+
+          // Render 2nd-level nested preview inside larger directory tiles
+          if (tile.entry_type === "directory" && tile.children_preview && tile.children_preview.length > 0 && w >= 120 && h >= 76) {
+            const subStage = el.querySelector(".tm-sub-stage");
+            const subW = w - 14;
+            const subH = h - 46;
+            const subBoxes = computeSquarifiedLayout(
+              tile.children_preview,
+              0,
+              0,
+              subW,
+              subH,
+              st => appState.metric === "apparent" ? st.apparent_bytes : st.allocated_bytes
+            );
+            subBoxes.forEach(sb => {
+              if (sb.w < 22 || sb.h < 14) return;
+              const subDiv = document.createElement("div");
+              subDiv.className = "tm-subtile";
+              subDiv.style.left = `${sb.x}px`;
+              subDiv.style.top = `${sb.y}px`;
+              subDiv.style.width = `${sb.w}px`;
+              subDiv.style.height = `${sb.h}px`;
+              subDiv.textContent = sb.item.label;
+              subStage.appendChild(subDiv);
+            });
+          }
+
+          el.onclick = async (ev) => {
+            ev.stopPropagation();
+            if (tile.is_tail_bucket) {
+              await inspectTailBucket(tile);
+            } else if (tile.entry_id !== null) {
+              await selectEntry(tile.entry_id);
+            }
+          };
+
+          el.ondblclick = async (ev) => {
+            ev.stopPropagation();
+            if (tile.entry_type === "directory" && tile.entry_id !== null) {
+              appState.quickFilter = "all";
+              updateQuickFilterChips();
+              await loadDirectoryView(tile.entry_id, true);
+            }
+          };
+
+          el.onkeydown = async (ev) => {
+            if (ev.key === "Enter") {
+              if (tile.entry_type === "directory" && tile.entry_id !== null) {
+                await loadDirectoryView(tile.entry_id, true);
+              } else if (tile.is_tail_bucket) {
+                await inspectTailBucket(tile);
+              }
+            }
+          };
+
+          canvas.appendChild(el);
+        });
+      } else if (appState.vizMode === "sunburst") {
+        renderSunburstComparison(canvas, tiles, W, H);
+      } else if (appState.vizMode === "extensions") {
+        renderExtensionsView(canvas, W, H);
+      }
+    }
+
+    function renderSunburstComparison(canvas, tiles, W, H) {
+      const cx = W / 2, cy = H / 2;
+      const rInner = 44;
+      const rOuter = Math.max(60, Math.min(W, H) / 2 - 14);
+      const total = tiles.reduce((s, t) => s + Math.max(1, tileEffectiveBytes(t)), 0);
+      let angle = -Math.PI / 2;
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", W);
+      svg.setAttribute("height", H);
+
+      tiles.forEach(tile => {
+        const val = Math.max(1, tileEffectiveBytes(tile));
+        const sweep = (val / total) * Math.PI * 2;
+        const a1 = angle;
+        const a2 = angle + sweep;
+        angle = a2;
+        const x1 = cx + rOuter * Math.cos(a1), y1 = cy + rOuter * Math.sin(a1);
+        const x2 = cx + rOuter * Math.cos(a2), y2 = cy + rOuter * Math.sin(a2);
+        const x3 = cx + rInner * Math.cos(a2), y3 = cy + rInner * Math.sin(a2);
+        const x4 = cx + rInner * Math.cos(a1), y4 = cy + rInner * Math.sin(a1);
+        const large = sweep > Math.PI ? 1 : 0;
+        const path = document.createElementNS(svgNS, "path");
+        path.setAttribute(
+          "d",
+          `M ${x1} ${y1} A ${rOuter} ${rOuter} 0 ${large} 1 ${x2} ${y2} L ${x3} ${y3} A ${rInner} ${rInner} 0 ${large} 0 ${x4} ${y4} Z`
+        );
+        path.setAttribute(
+          "fill",
+          tile.is_tail_bucket ? "#64748b66" : tile.entry_type === "directory" ? "#0284c766" : "#0d948866"
+        );
+        path.setAttribute("stroke", "#2dd4bf");
+        path.style.cursor = "pointer";
+        path.onclick = () => {
+          if (tile.is_tail_bucket) inspectTailBucket(tile);
+          else if (tile.entry_id !== null) selectEntry(tile.entry_id);
+        };
+        path.ondblclick = () => {
+          if (tile.entry_type === "directory" && tile.entry_id !== null) {
+            loadDirectoryView(tile.entry_id, true);
+          }
+        };
+        svg.appendChild(path);
+      });
+      canvas.appendChild(svg);
+    }
+
+    async function renderExtensionsView(canvas, W, H) {
+      try {
+        const stats = await apiGet("/api/extensions");
+        appState.extensionStats = stats;
+        const top = stats.slice(0, 24);
+        const boxes = computeSquarifiedLayout(
+          top,
+          0,
+          0,
+          W,
+          H,
+          st => appState.metric === "apparent" ? st.apparent_bytes : st.allocated_bytes
+        );
+        boxes.forEach(({ item: st, x, y, w, h }) => {
+          const div = document.createElement("div");
+          div.className = "tm-tile kind-file";
+          div.style.left = `${x}px`;
+          div.style.top = `${y}px`;
+          div.style.width = `${Math.max(18, w)}px`;
+          div.style.height = `${Math.max(18, h)}px`;
+          const bytes = appState.metric === "apparent" ? st.apparent_bytes : st.allocated_bytes;
+          div.innerHTML = `
+            <div class="tm-header"><span class="tm-label">.${escapeHtml(st.extension)}</span></div>
+            <div class="tm-footer"><span>${formatBytes(bytes)}</span><span>${st.files_count} file</span></div>
+          `;
+          div.onclick = () => {
+            document.getElementById("search-input").value = st.extension === "(nessuna)" ? "" : `.${st.extension}`;
+            document.getElementById("search-scope").value = "global";
+            onSearchOrFilterChanged();
+          };
+          canvas.appendChild(div);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function inspectTailBucket(tile) {
+      appState.activeBucketTile = tile;
+      appState.quickFilter = "bucket";
+      updateQuickFilterChips();
+      renderVisualization();
+      const res = await apiPost("/api/explore/bucket", {
+        entry_ids: tile.bucketed_entry_ids,
+        sort_field: appState.sortField,
+        descending: appState.sortDesc
+      });
+      renderEntriesTable(res.items || [], appState.currentDirView ? appState.currentDirView.directory : null);
+    }
+
+    function renderEntriesTable(items, parentDir) {
+      const tbody = document.getElementById("entries-tbody");
+      tbody.innerHTML = "";
+      if (!items || items.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessun elemento corrispondente ai criteri selezionati.</td></tr>`;
+        return;
+      }
+
+      const parentTotal = parentDir
+        ? Math.max(1, effectiveBytesOf(parentDir))
+        : Math.max(1, ...items.map(effectiveBytesOf));
+
+      items.forEach(item => {
+        const tr = document.createElement("tr");
+        if (item.id === appState.selectedEntryId) tr.className = "selected";
+
+        const eff = effectiveBytesOf(item);
+        const pct = Math.min(100, Math.max(0, (eff / parentTotal) * 100));
+        const allocBytes = item.entry_type === "directory" ? item.subtree_allocated_bytes : item.allocated_bytes;
+        const appBytes = item.entry_type === "directory" ? item.subtree_apparent_bytes : item.apparent_bytes;
+
+        const flags = [];
+        if (item.access_status === "permission_denied") flags.push(`<span class="badge badge-danger">Permesso Negato</span>`);
+        else if (item.access_status === "excluded_mount") flags.push(`<span class="badge badge-warn">Altro Mount</span>`);
+        else if (item.access_status === "symlink_skipped") flags.push(`<span class="badge badge-special">Symlink</span>`);
+        else if (item.access_status === "symlink_cycle_skipped") flags.push(`<span class="badge badge-danger">Ciclo Symlink</span>`);
+        else if (item.access_status === "vanished") flags.push(`<span class="badge badge-warn">Rimosso</span>`);
+
+        if (item.is_sparse) flags.push(`<span class="badge badge-special">Sparse</span>`);
+        if (item.nlink > 1 && item.entry_type !== "directory") {
+          flags.push(`<span class="badge badge-special">HardLink (${item.shared_link_paths_in_scan}/${item.nlink})</span>`);
+        }
+        if (item.subtree_error_count > 0 && item.entry_type === "directory") {
+          flags.push(`<span class="badge badge-warn">${item.subtree_error_count} avvisi</span>`);
+        }
+        if (!item.is_valid_utf8) {
+          flags.push(`<span class="badge badge-warn">Non-UTF-8</span>`);
+        }
+
+        const countsStr = item.entry_type === "directory"
+          ? `${item.subtree_files_count} file, ${item.subtree_dirs_count} dir`
+          : "1 file";
+
+        const displayName = (appState.quickFilter !== "all" || document.getElementById("search-input").value.trim())
+          ? (item.rel_path_display || item.name_display)
+          : item.name_display;
+
+        const actionBtn = item.entry_type === "directory"
+          ? `<button class="btn" style="padding:2px 8px; font-size:11.5px;" onclick="event.stopPropagation(); drillInto(${item.id})">Apri ↵</button>`
+          : "";
+
+        tr.innerHTML = `
+          <td>
+            <div style="font-weight:600; word-break:break-all;">${escapeHtml(displayName)}</div>
+          </td>
+          <td><span class="mono" style="color:var(--text-secondary);">${item.entry_type}</span></td>
+          <td class="mono">
+            <div class="bar-track"><div class="bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+            ${formatBytes(allocBytes)}
+          </td>
+          <td class="mono">${formatBytes(appBytes)}</td>
+          <td class="mono" style="color:var(--text-secondary);">${countsStr}</td>
+          <td><div style="display:flex; gap:4px; flex-wrap:wrap;">${flags.join("") || '<span style="color:var(--text-muted);">OK</span>'}</div></td>
+          <td>${actionBtn}</td>
+        `;
+
+        tr.onclick = () => selectEntry(item.id);
+        tr.ondblclick = () => {
+          if (item.entry_type === "directory") {
+            drillInto(item.id);
+          }
+        };
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function drillInto(dirId) {
+      appState.quickFilter = "all";
+      document.getElementById("search-input").value = "";
+      updateQuickFilterChips();
+      await loadDirectoryView(dirId, true);
+    }
+
+    async function selectEntry(entryId) {
+      appState.selectedEntryId = entryId;
+      try {
+        const detail = await apiGet(`/api/entry?id=${entryId}`);
+        appState.selectedDetail = detail;
+        renderInspector(detail);
+        // Highlight selected row/tile without re-fetching
+        renderVisualization();
+        document.querySelectorAll("#entries-tbody tr").forEach(tr => tr.classList.remove("selected"));
+      } catch (e) {
+        console.error("Select entry error:", e);
+      }
+    }
+
+    function renderInspector(d) {
+      const s = d.summary;
+      document.getElementById("insp-type-badge").textContent = s.entry_type.toUpperCase();
+      document.getElementById("insp-utf8-badge").classList.toggle("hidden", s.is_valid_utf8);
+      document.getElementById("insp-name").textContent = s.name_display || "/";
+      document.getElementById("insp-abs-path").textContent = d.abs_path_display;
+
+      const alloc = s.entry_type === "directory" ? s.subtree_allocated_bytes : s.allocated_bytes;
+      const app = s.entry_type === "directory" ? s.subtree_apparent_bytes : s.apparent_bytes;
+      document.getElementById("insp-allocated").textContent = formatBytes(alloc);
+      document.getElementById("insp-allocated-share").textContent =
+        `${alloc.toLocaleString("it-IT")} B (${(d.share_of_root_allocated * 100).toFixed(1)}% del totale)`;
+      document.getElementById("insp-apparent").textContent = formatBytes(app);
+      document.getElementById("insp-apparent-share").textContent =
+        `${app.toLocaleString("it-IT")} B (${(d.share_of_root_apparent * 100).toFixed(1)}% del totale)`;
+
+      document.getElementById("insp-access-status").textContent =
+        s.error_message ? `${s.access_status} (${s.error_message})` : s.access_status;
+      document.getElementById("insp-files-cnt").textContent = s.subtree_files_count.toLocaleString("it-IT");
+      document.getElementById("insp-dirs-cnt").textContent = s.subtree_dirs_count.toLocaleString("it-IT");
+      document.getElementById("insp-symlinks-cnt").textContent = s.subtree_symlinks_count.toLocaleString("it-IT");
+      document.getElementById("insp-direct-bytes").textContent =
+        s.entry_type === "directory" ? formatBytesWithRaw(s.direct_files_allocated_bytes) : "N/A (File singolo)";
+      document.getElementById("insp-errors-cnt").textContent = s.subtree_error_count.toLocaleString("it-IT");
+      document.getElementById("insp-mtime").textContent = formatTimestamp(s.mtime_sec);
+      document.getElementById("insp-inode").textContent = `ino=${d.ino}, dev=${d.dev}`;
+
+      const specialParts = [];
+      if (s.is_sparse) specialParts.push("File Sparse (blocchi < byte logici)");
+      if (s.nlink > 1 && s.entry_type !== "directory") {
+        specialParts.push(`Hard link: ${s.shared_link_paths_in_scan} nella scansione / ${s.nlink} totali`);
+        if (s.has_external_hardlinks) specialParts.push("Link esterni presenti!");
+      }
+      document.getElementById("insp-special-flags").textContent =
+        specialParts.length ? specialParts.join(" • ") : "Standard (nlink=1)";
+
+      const q = d.space_qualification;
+      document.getElementById("insp-qual-cat").textContent = q.category_label;
+      document.getElementById("insp-qual-det").textContent = formatBytes(q.detected_allocated_bytes);
+      document.getElementById("insp-qual-pot").textContent = formatBytes(q.potentially_recoverable_bytes);
+      document.getElementById("insp-qual-ver").textContent = formatBytes(q.verified_recoverable_bytes);
+      document.getElementById("insp-qual-note").textContent = q.explanation;
+
+      const btnEnter = document.getElementById("btn-insp-enter");
+      btnEnter.classList.toggle("hidden", s.entry_type !== "directory" || s.id === appState.currentDirId);
+
+      const btnParent = document.getElementById("btn-insp-parent");
+      btnParent.classList.toggle("hidden", s.parent_id === null || s.parent_id === undefined || s.parent_id === appState.currentDirId);
+
+      document.getElementById("btn-insp-reveal").disabled = false;
+      document.getElementById("btn-insp-copy").disabled = false;
+      document.getElementById("insp-action-feedback").textContent = "";
+    }
+
+    async function enterSelectedDirectory() {
+      if (appState.selectedDetail && appState.selectedDetail.summary.entry_type === "directory") {
+        await drillInto(appState.selectedDetail.summary.id);
+      }
+    }
+
+    async function navigateToSelectedParent() {
+      if (appState.selectedDetail && appState.selectedDetail.summary.parent_id !== null) {
+        const pid = appState.selectedDetail.summary.parent_id;
+        const targetId = appState.selectedDetail.summary.id;
+        appState.quickFilter = "all";
+        document.getElementById("search-input").value = "";
+        updateQuickFilterChips();
+        await loadDirectoryView(pid, false);
+        await selectEntry(targetId);
+      }
+    }
+
+    async function revealSelectedInFileManager() {
+      if (appState.selectedEntryId === null) return;
+      const res = await apiPost("/api/fs/reveal", { entry_id: appState.selectedEntryId });
+      document.getElementById("insp-action-feedback").textContent = res.opened
+        ? `Aperto nel File Manager: ${res.directory}`
+        : `Percorso: ${res.directory}`;
+    }
+
+    async function copySelectedPath() {
+      if (!appState.selectedDetail) return;
+      const p = appState.selectedDetail.abs_path_display;
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(p);
+      }
+      document.getElementById("insp-action-feedback").textContent = "Percorso copiato negli appunti.";
+    }
+
+    function setQuickFilter(flt) {
+      appState.quickFilter = flt;
+      appState.activeBucketTile = null;
+      updateQuickFilterChips();
+      onSearchOrFilterChanged();
+    }
+
+    function updateQuickFilterChips() {
+      const map = {
+        all: "flt-all",
+        top_files: "flt-top-files",
+        top_dirs: "flt-top-dirs",
+        errors: "flt-errors",
+        sparse: "flt-sparse",
+        hardlinks: "flt-hardlinks"
+      };
+      Object.entries(map).forEach(([k, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle("active", appState.quickFilter === k);
+      });
+    }
+
+    async function onSearchOrFilterChanged() {
+      const q = document.getElementById("search-input").value.trim();
+      const scope = document.getElementById("search-scope").value;
+
+      if (appState.quickFilter === "all" && !q && scope === "current") {
+        if (appState.currentDirView) {
+          renderEntriesTable(appState.currentDirView.children, appState.currentDirView.directory);
+        }
+        return;
+      }
+      await runSearchAndFilter();
+    }
+
+    async function runSearchAndFilter() {
+      const q = document.getElementById("search-input").value.trim();
+      const scope = document.getElementById("search-scope").value;
+
+      // If filtering only immediate children of current directory by text query
+      if (scope === "current" && appState.quickFilter === "all" && appState.currentDirView) {
+        const ql = q.toLowerCase();
+        const filtered = appState.currentDirView.children.filter(c =>
+          c.name_display.toLowerCase().includes(ql)
+        );
+        renderEntriesTable(filtered, appState.currentDirView.directory);
+        return;
+      }
+
+      const payload = {
+        query: q || null,
+        metric: appState.metric,
+        only_errors: appState.quickFilter === "errors",
+        only_sparse: appState.quickFilter === "sparse",
+        only_hardlinks: appState.quickFilter === "hardlinks",
+        top_files_only: appState.quickFilter === "top_files",
+        top_dirs_only: appState.quickFilter === "top_dirs",
+        ancestor_id: scope === "subtree" ? appState.currentDirId : null,
+        sort_field: appState.sortField,
+        descending: appState.sortDesc,
+        limit: 300
+      };
+
+      const res = await apiPost("/api/search", payload);
+      renderEntriesTable(res.items || [], null);
+    }
+
+    async function onSortChanged() {
+      appState.sortField = document.getElementById("sort-field").value;
+      if (appState.currentDirId !== null) {
+        await loadDirectoryView(appState.currentDirId, false);
+      }
+    }
+
+    async function toggleSortDirection() {
+      appState.sortDesc = !appState.sortDesc;
+      document.getElementById("btn-sort-dir").textContent = appState.sortDesc ? "↓ Desc" : "↑ Asc";
+      if (appState.currentDirId !== null) {
+        await loadDirectoryView(appState.currentDirId, false);
+      }
+    }
+
+    async function toggleSizeMetric() {
+      appState.metric = appState.metric === "allocated" ? "apparent" : "allocated";
+      document.getElementById("btn-metric").textContent =
+        appState.metric === "allocated" ? "Metrica: Allocata" : "Metrica: Apparente";
+      appState.sortField = appState.metric === "allocated" ? "allocated_bytes" : "apparent_bytes";
+      document.getElementById("sort-field").value = appState.sortField;
+      if (appState.currentDirId !== null) {
+        await loadDirectoryView(appState.currentDirId, false);
+      }
+      if (!document.getElementById("pane-recover").classList.contains("hidden")) {
+        await loadRecoverView();
+      }
+    }
+
+    function setVizMode(mode) {
+      appState.vizMode = mode;
+      document.getElementById("viz-treemap-btn").classList.toggle("btn-primary", mode === "treemap");
+      document.getElementById("viz-sunburst-btn").classList.toggle("btn-primary", mode === "sunburst");
+      document.getElementById("viz-ext-btn").classList.toggle("btn-primary", mode === "extensions");
+      renderVisualization();
+    }
+
+    async function switchMode(mode) {
+      ["explore", "recover", "history"].forEach(m => {
+        document.getElementById("pane-" + m).classList.toggle("hidden", m !== mode);
+        document.getElementById("tab-" + m).classList.toggle("active", m === mode);
+      });
+      if (mode === "recover") {
+        await loadRecoverView();
+      } else if (mode === "explore") {
+        renderVisualization();
+      }
+    }
+
+    async function loadRecoverView() {
+      try {
+        const rep = await apiGet(`/api/recover?metric=${appState.metric}&limit=25`);
+        document.getElementById("rec-tot-detected").textContent = formatBytes(rep.total_detected_allocated_bytes);
+        document.getElementById("rec-tot-potential").textContent = formatBytes(rep.total_potentially_recoverable_bytes);
+        document.getElementById("rec-tot-verified").textContent = formatBytes(rep.total_verified_recoverable_bytes);
+
+        const tbody = document.getElementById("recover-tbody");
+        tbody.innerHTML = "";
+
+        const rows = [];
+        (rep.cache_and_temp_candidates || []).forEach(c => {
+          rows.push({
+            id: c.entry.id,
+            isDir: c.entry.entry_type === "directory",
+            path: c.entry.rel_path_display || c.entry.name_display,
+            cat: c.qualification.category_label,
+            det: c.qualification.detected_allocated_bytes,
+            pot: c.qualification.potentially_recoverable_bytes,
+            ver: c.qualification.verified_recoverable_bytes,
+            exp: c.qualification.explanation,
+            badge: "badge-warn"
+          });
+        });
+
+        (rep.largest_files || []).slice(0, 10).forEach(f => {
+          rows.push({
+            id: f.id,
+            isDir: false,
+            path: f.rel_path_display || f.name_display,
+            cat: "File Grande (Dati utente / progetto)",
+            det: f.allocated_bytes,
+            pot: 0,
+            ver: 0,
+            exp: "Mostrato per dimensione; non classificato automaticamente come cache.",
+            badge: "badge-special"
+          });
+        });
+
+        if (rows.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:18px; color:var(--text-secondary);">Nessun elemento rilevato nella scansione corrente.</td></tr>`;
+          return;
+        }
+
+        rows.forEach(r => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono" style="font-weight:600;">${escapeHtml(r.path)}</td>
+            <td><span class="badge ${r.badge}">${escapeHtml(r.cat)}</span></td>
+            <td class="mono">${formatBytes(r.det)}</td>
+            <td class="mono" style="color:var(--warn); font-weight:600;">${formatBytes(r.pot)}</td>
+            <td class="mono" style="color:var(--ok); font-weight:700;">${formatBytes(r.ver)}</td>
+            <td style="font-size:12px; color:var(--text-secondary);">${escapeHtml(r.exp)}</td>
+            <td>
+              <button class="btn" style="padding:2px 8px; font-size:11.5px;" onclick="event.stopPropagation(); jumpFromRecoverToExplore(${r.id}, ${r.isDir})">
+                Ispeziona
+              </button>
+            </td>
+          `;
+          tr.onclick = () => selectEntry(r.id);
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error("Recover error:", e);
+      }
+    }
+
+    async function jumpFromRecoverToExplore(entryId, isDir) {
+      await switchMode("explore");
+      await selectEntry(entryId);
+      if (isDir) {
+        await loadDirectoryView(entryId, true);
+      } else if (appState.selectedDetail && appState.selectedDetail.summary.parent_id !== null) {
+        await loadDirectoryView(appState.selectedDetail.summary.parent_id, false);
+        await selectEntry(entryId);
+      }
+    }
+
+    // Modal Directory Browser
+    async function openDirBrowserModal() {
+      document.getElementById("dir-modal").classList.remove("hidden");
+      const current = document.getElementById("root-input").value.trim() || "/";
+      await loadModalDirs(current);
+    }
+
+    function closeDirBrowserModal() {
+      document.getElementById("dir-modal").classList.add("hidden");
+    }
+
+    async function loadModalDirs(path) {
+      try {
+        const listing = await apiGet(`/api/fs/list-dirs?path=${encodeURIComponent(path)}`);
+        document.getElementById("modal-current-path").value = listing.current_path;
+        appState.modalParentPath = listing.parent_path;
+        document.getElementById("modal-up-btn").disabled = !listing.parent_path;
+        document.getElementById("modal-error").textContent = listing.error || "";
+
+        const list = document.getElementById("modal-dirs-list");
+        list.innerHTML = "";
+        (listing.directories || []).forEach(d => {
+          const item = document.createElement("div");
+          item.className = "dir-list-item";
+          item.innerHTML = `<span>📁 ${escapeHtml(d.name)}</span><span style="color:var(--text-muted); font-size:11px;">Apri ↵</span>`;
+          item.onclick = () => loadModalDirs(d.path);
+          list.appendChild(item);
+        });
+      } catch (e) {
+        document.getElementById("modal-error").textContent = e.message;
+      }
+    }
+
+    async function browseModalParent() {
+      if (appState.modalParentPath) {
+        await loadModalDirs(appState.modalParentPath);
+      }
+    }
+
+    async function confirmModalDirectory() {
+      const chosen = document.getElementById("modal-current-path").value.trim();
+      if (chosen) {
+        document.getElementById("root-input").value = chosen;
+        closeDirBrowserModal();
+        await triggerStartScan();
+      }
+    }
+
+    async function tryNativePicker() {
+      const res = await apiPost("/api/fs/pick-native", {});
+      if (res.picked_path) {
+        document.getElementById("root-input").value = res.picked_path;
+        closeDirBrowserModal();
+        await triggerStartScan();
+      }
+    }
+
+    function toggleTheme() {
+      const root = document.documentElement;
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      renderVisualization();
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    window.addEventListener("resize", () => renderVisualization());
+    window.addEventListener("keydown", (ev) => {
+      if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT")) return;
+      if (ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowUp")) {
+        ev.preventDefault();
+        navigateUp();
+      }
+    });
+
+    initApp();
+  </script>
+</body>
+</html>

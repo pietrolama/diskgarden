@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DiskGarden — Prototipo Visivo & Confronto Rappresentazioni (Milestone 0)</title>
+  <style>
+    :root, [data-theme="dark"] {
+      --bg-app: #0b1013;
+      --bg-surface: #121a1f;
+      --bg-elevated: #18232a;
+      --bg-hover: #1f2e37;
+      --border-subtle: #24343e;
+      --border-focus: #2dd4bf;
+      --text-primary: #e6f0ec;
+      --text-secondary: #9bb0a8;
+      --text-muted: #687d75;
+      --accent-primary: #2dd4bf;
+      --accent-primary-dim: rgba(45, 212, 191, 0.14);
+      --color-dir: #1e3a4c;
+      --color-dir-border: #38bdf8;
+      --color-file: #1b3633;
+      --color-file-border: #2dd4bf;
+      --color-cache: #3b2a14;
+      --color-cache-border: #f59e0b;
+      --color-growth: #fb7185;
+      --color-growth-bg: rgba(251, 113, 133, 0.14);
+      --color-shrink: #34d399;
+      --color-shrink-bg: rgba(52, 211, 153, 0.14);
+      --color-warn: #f59e0b;
+      --color-warn-bg: rgba(245, 158, 11, 0.15);
+      --color-special: #818cf8;
+      --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+    }
+
+    [data-theme="light"] {
+      --bg-app: #f4f7f6;
+      --bg-surface: #ffffff;
+      --bg-elevated: #edf2f0;
+      --bg-hover: #e2ebe7;
+      --border-subtle: #cfdcd7;
+      --border-focus: #0d9488;
+      --text-primary: #111c18;
+      --text-secondary: #435750;
+      --text-muted: #6c8079;
+      --accent-primary: #0d9488;
+      --accent-primary-dim: rgba(13, 148, 136, 0.12);
+      --color-dir: #e0f2fe;
+      --color-dir-border: #0284c7;
+      --color-file: #ccfbf1;
+      --color-file-border: #0d9488;
+      --color-cache: #fef3c7;
+      --color-cache-border: #d97706;
+      --color-growth: #e11d48;
+      --color-growth-bg: rgba(225, 29, 72, 0.1);
+      --color-shrink: #059669;
+      --color-shrink-bg: rgba(5, 150, 105, 0.1);
+      --color-warn: #d97706;
+      --color-warn-bg: rgba(217, 119, 6, 0.12);
+      --color-special: #4f46e5;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-app);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.45;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Prototype notice bar */
+    .proto-banner {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 6px 16px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .proto-banner strong { color: var(--accent-primary); }
+
+    /* Top Header (Area Superiore) */
+    header.top-bar {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+    .brand-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      background: var(--accent-primary);
+      box-shadow: 0 0 0 3px var(--accent-primary-dim);
+    }
+    .active-root {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+    .scan-badge {
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: var(--color-warn-bg);
+      color: var(--color-warn);
+      border: 1px solid var(--color-warn);
+      font-weight: 600;
+    }
+    .mode-tabs {
+      display: flex;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 7px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .mode-tab {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      padding: 6px 14px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .mode-tab.active {
+      background: var(--accent-primary);
+      color: #06201c;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    button.btn {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button.btn:hover { background: var(--bg-hover); }
+    button.btn-primary {
+      background: var(--accent-primary-dim);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
+    }
+
+    /* Main Workspace */
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      min-height: 0;
+    }
+    .center-pane {
+      display: flex;
+      flex-direction: column;
+      padding: 14px 18px;
+      gap: 12px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .toolbar-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+    .crumb {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      padding: 4px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .crumb:hover { border-color: var(--accent-primary); }
+    .view-switcher {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    /* Treemap / Visualization Canvas */
+    .viz-container {
+      position: relative;
+      height: 330px;
+      min-height: 260px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 8px;
+      overflow: hidden;
+    }
+    .treemap-stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    .tm-node {
+      position: absolute;
+      border-radius: 5px;
+      padding: 7px 9px;
+      overflow: hidden;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 90ms ease, box-shadow 90ms ease;
+      user-select: none;
+    }
+    .tm-node:hover {
+      z-index: 4;
+      box-shadow: 0 0 0 2px var(--accent-primary);
+    }
+    .tm-node.selected {
+      z-index: 5;
+      box-shadow: 0 0 0 2.5px var(--text-primary);
+    }
+    .tm-node.type-dir {
+      background: var(--color-dir);
+      border: 1.5px solid var(--color-dir-border);
+    }
+    .tm-node.type-file {
+      background: var(--color-file);
+      border: 1.5px solid var(--color-file-border);
+    }
+    .tm-node.type-cache {
+      background: var(--color-cache);
+      border: 1.5px dashed var(--color-cache-border);
+    }
+    .tm-node.type-error {
+      background: var(--color-warn-bg);
+      border: 1.5px dotted var(--color-warn);
+    }
+    .tm-node.type-bucket {
+      background: var(--bg-elevated);
+      border: 1.5px dashed var(--text-muted);
+    }
+    .tm-title {
+      font-weight: 600;
+      font-size: 12.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tm-meta {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      gap: 4px;
+      align-items: center;
+    }
+    .delta-pill {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .delta-up { background: var(--color-growth-bg); color: var(--color-growth); border: 1px solid var(--color-growth); }
+    .delta-down { background: var(--color-shrink-bg); color: var(--color-shrink); border: 1px solid var(--color-shrink); }
+    .delta-warn { background: var(--color-warn-bg); color: var(--color-warn); border: 1px solid var(--color-warn); }
+
+    /* Table below visualization */
+    .data-table-wrap {
+      flex: 1;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      overflow: auto;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.data-table th {
+      text-align: left;
+      padding: 9px 12px;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      position: sticky;
+      top: 0;
+    }
+    table.data-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    table.data-table tr { cursor: pointer; }
+    table.data-table tr:hover { background: var(--bg-hover); }
+    table.data-table tr.selected { background: var(--accent-primary-dim); }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    /* Right Inspector Panel (Pannello Informativo) */
+    aside.inspector {
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-subtle);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+    }
+    .inspector h2 {
+      font-size: 15px;
+      word-break: break-all;
+    }
+    .inspector-path {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: var(--bg-elevated);
+      padding: 6px 8px;
+      border-radius: 5px;
+      word-break: break-all;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .metric-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .metric-val {
+      font-family: var(--font-mono);
+      font-size: 14.5px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .inspector-section {
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12.5px;
+      gap: 8px;
+    }
+    .kv-row span:first-child { color: var(--text-secondary); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="proto-banner">
+    <span><strong>PROTOTIPO MILESTONE 0</strong> — Verifica del layout principale, confronto Treemap vs Radiale vs Lista e semantica Explore / History / Recover.</span>
+    <span>Dataset sintetico di riferimento: <code>/home/dev/workstation</code> (48,4 GiB allocati)</span>
+  </div>
+
+  <!-- Area Superiore -->
+  <header class="top-bar">
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>DiskGarden</span>
+      </div>
+      <div class="active-root" title="Directory radice attiva">
+        <span>/home/dev/workstation</span>
+        <span class="scan-badge" title="1 sottodirectory con Permesso Negato non è stata letta">Parziale (1 dir non accessibile)</span>
+      </div>
+    </div>
+
+    <nav class="mode-tabs" aria-label="Modalità applicazione">
+      <button class="mode-tab active" onclick="setMode('explore')" id="tab-explore">1. Explore</button>
+      <button class="mode-tab" onclick="setMode('history')" id="tab-history">2. History (Diff)</button>
+      <button class="mode-tab" onclick="setMode('recover')" id="tab-recover">3. Recover</button>
+    </nav>
+
+    <div class="top-actions">
+      <button class="btn" onclick="toggleMetric()" id="btn-metric">Metrica: Allocata (Blocchi)</button>
+      <button class="btn" onclick="toggleTheme()">Tema Dark/Light</button>
+      <button class="btn btn-primary">Salva Snapshot</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- Area Centrale -->
+    <main class="center-pane">
+      <!-- EXPLORE VIEW -->
+      <section id="view-explore" style="display:flex; flex-direction:column; gap:12px; flex:1; min-height:0;">
+        <div class="toolbar-row">
+          <div class="breadcrumbs" id="breadcrumbs"></div>
+          <div class="view-switcher">
+            <span style="font-size:12px; color:var(--text-secondary);">Rappresentazione:</span>
+            <button class="btn btn-primary" id="viz-btn-treemap" onclick="setVizType('treemap')">Treemap Squarified (Scelta)</button>
+            <button class="btn" id="viz-btn-sunburst" onclick="setVizType('sunburst')">Radiale / Sunburst (Confronto)</button>
+          </div>
+        </div>
+
+        <div class="viz-container" id="viz-box">
+          <div class="treemap-stage" id="treemap-stage"></div>
+        </div>
+
+        <div class="data-table-wrap">
+          <table class="data-table" aria-label="Elementi nella directory corrente">
+            <thead>
+              <tr>
+                <th>Nome & Tipo</th>
+                <th>Allocata (Reale)</th>
+                <th>Apparente (Logica)</th>
+                <th>Elementi</th>
+                <th>Δ vs Snapshot #14</th>
+                <th>Stato & Note</th>
+              </tr>
+            </thead>
+            <tbody id="explore-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- HISTORY VIEW -->
+      <section id="view-history" class="hidden" style="display:flex; flex-direction:column; gap:12px; flex:1; min-height:0;">
+        <div class="toolbar-row" style="background:var(--bg-surface); padding:12px; border-radius:8px; border:1px solid var(--border-subtle);">
+          <div>
+            <strong>Confronto Snapshot:</strong>
+            <span class="mono">Snap #14 (2026-10-14 09:15, Parziale)</span>
+            <span>→</span>
+            <span class="mono">Snap #15 (2026-10-21 18:00, Parziale)</span>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center;">
+            <span class="delta-pill delta-up" style="font-size:13px; padding:4px 10px;">Variazione Netta: +6,80 GiB (+16,3%)</span>
+            <span class="delta-pill delta-warn" style="font-size:12px; padding:4px 10px;">1 percorso non confrontabile</span>
+          </div>
+        </div>
+
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Percorso relativo</th>
+                <th>Classificazione Diff</th>
+                <th>Precedente (T0)</th>
+                <th>Attuale (T1)</th>
+                <th>Variazione Assoluta</th>
+                <th>Affidabilità / Note</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- RECOVER VIEW -->
+      <section id="view-recover" class="hidden" style="display:flex; flex-direction:column; gap:12px; flex:1; min-height:0;">
+        <div class="toolbar-row" style="background:var(--bg-surface); padding:12px; border-radius:8px; border:1px solid var(--border-subtle);">
+          <div>
+            <strong>Analisi Spazio Recuperabile (Solo revisione — Nessuna cancellazione automatica)</strong>
+            <div style="font-size:12px; color:var(--text-secondary);">Distingue tra spazio occupato rilevato, spazio potenzialmente recuperabile e spazio verificato (al netto di hard link esterni e directory parziali).</div>
+          </div>
+        </div>
+
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Elemento / Percorso</th>
+                <th>Categoria Regola</th>
+                <th>1. Occupato Rilevato</th>
+                <th>2. Potenzialmente Recuperabile</th>
+                <th>3. Recuperabile Verificato</th>
+                <th>Qualifica Tecnica</th>
+              </tr>
+            </thead>
+            <tbody id="recover-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Pannello Informativo (Inspector) -->
+    <aside class="inspector" aria-label="Pannello dettagli elemento selezionato">
+      <div>
+        <div style="font-size:11px; color:var(--accent-primary); text-transform:uppercase; font-weight:700;" id="insp-kind">DIRECTORY</div>
+        <h2 id="insp-name">projects</h2>
+      </div>
+      <div class="inspector-path" id="insp-path">/home/dev/workstation/projects</div>
+
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-label">Dim. Allocata</div>
+          <div class="metric-val" id="insp-alloc">22,40 GiB</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Dim. Apparente</div>
+          <div class="metric-val" id="insp-apparent">22,15 GiB</div>
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="kv-row"><span>Stato accesso:</span><strong id="insp-status">OK (Completa)</strong></div>
+        <div class="kv-row"><span>Conteggio:</span><span class="mono" id="insp-counts">18.420 file, 1.104 dir</span></div>
+        <div class="kv-row"><span>Ultima modifica:</span><span class="mono" id="insp-mtime">2026-10-21 17:42:11</span></div>
+        <div class="kv-row"><span>Hard link / Sparse:</span><span class="mono" id="insp-special">Nessun hard link esterno</span></div>
+        <div class="kv-row"><span>Δ vs Snapshot #14:</span><span id="insp-delta"><span class="delta-pill delta-up">+4,90 GiB</span></span></div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="metric-label">Qualifica Spazio (Recover)</div>
+        <div class="kv-row"><span>1. Occupato rilevato:</span><span class="mono" id="insp-rec-1">22,40 GiB</span></div>
+        <div class="kv-row"><span>2. Potenzialmente rec.:</span><span class="mono" id="insp-rec-2">8,20 GiB (target/debug)</span></div>
+        <div class="kv-row"><span>3. Verificato su disco:</span><span class="mono" id="insp-rec-3">8,20 GiB</span></div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="metric-label">Azioni Non Distruttive</div>
+        <button class="btn" style="width:100%; text-align:left;">Apri nel File Manager di sistema</button>
+        <button class="btn" style="width:100%; text-align:left;" onclick="copyPath()">Copia percorso negli appunti</button>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    const TREE = {
+      id: "root",
+      name: "workstation",
+      path: "/home/dev/workstation",
+      kind: "dir",
+      allocGiB: 48.4,
+      appGiB: 54.8,
+      files: 64210,
+      dirs: 4310,
+      mtime: "2026-10-21 17:58",
+      status: "Parziale (1 sottodir PermissionDenied)",
+      special: "1 file sparse, 1 gruppo hard-link",
+      delta: "+6,80 GiB",
+      deltaType: "up",
+      recPot: "14,60 GiB",
+      recVer: "11,40 GiB",
+      children: [
+        {
+          id: "projects", name: "projects", path: "/home/dev/workstation/projects",
+          kind: "dir", allocGiB: 22.4, appGiB: 22.15, files: 18420, dirs: 1104,
+          mtime: "2026-10-21 17:42", status: "OK", special: "Artefatti Cargo in target/",
+          delta: "+4,90 GiB", deltaType: "up", recPot: "8,20 GiB (target/debug)", recVer: "8,20 GiB",
+          children: [
+            { id: "target", name: "diskGarden/target/debug", path: "/home/dev/workstation/projects/diskGarden/target/debug", kind: "cache", allocGiB: 8.2, appGiB: 8.2, files: 4120, dirs: 180, mtime: "2026-10-21 17:42", status: "OK", special: "Build cache Rust", delta: "+3,80 GiB", deltaType: "up", recPot: "8,20 GiB", recVer: "8,20 GiB" },
+            { id: "repos", name: "linux-kernel-tree", path: "/home/dev/workstation/projects/linux-kernel-tree", kind: "dir", allocGiB: 9.6, appGiB: 9.4, files: 12300, dirs: 810, mtime: "2026-10-19 11:20", status: "OK", special: "Codice sorgente", delta: "+1,10 GiB", deltaType: "up", recPot: "0 GiB", recVer: "0 GiB" },
+            { id: "datasets", name: "synthetic-bench.tar.zst", path: "/home/dev/workstation/projects/synthetic-bench.tar.zst", kind: "file", allocGiB: 4.6, appGiB: 4.55, files: 1, dirs: 0, mtime: "2026-10-10 08:12", status: "OK", special: "File singolo", delta: "0 B (mtime invariato)", deltaType: "none", recPot: "0 GiB", recVer: "0 GiB" }
+          ]
+        },
+        {
+          id: "vms", name: "vms", path: "/home/dev/workstation/vms",
+          kind: "dir", allocGiB: 11.2, appGiB: 18.0, files: 6, dirs: 2,
+          mtime: "2026-10-20 22:15", status: "OK", special: "Contiene file SPARSE (18 GiB logici -> 11,2 GiB allocati)",
+          delta: "+0,40 GiB", deltaType: "up", recPot: "0 GiB", recVer: "0 GiB",
+          children: [
+            { id: "debian-vm", name: "debian-test.qcow2 (SPARSE)", path: "/home/dev/workstation/vms/debian-test.qcow2", kind: "file", allocGiB: 11.2, appGiB: 18.0, files: 1, dirs: 0, mtime: "2026-10-20 22:15", status: "OK", special: "Sparse file: 62% blocchi allocati", delta: "+0,40 GiB", deltaType: "up", recPot: "0 GiB", recVer: "0 GiB" }
+          ]
+        },
+        {
+          id: "cache", name: ".cache", path: "/home/dev/workstation/.cache",
+          kind: "cache", allocGiB: 6.4, appGiB: 6.4, files: 41200, dirs: 2980,
+          mtime: "2026-10-21 17:58", status: "OK", special: "XDG_CACHE_HOME (1 hard-link condiviso 3,2 GiB)",
+          delta: "+2,10 GiB", deltaType: "up", recPot: "6,40 GiB", recVer: "3,20 GiB (3,2 GiB ha hard-link esterno)",
+          children: []
+        },
+        {
+          id: "media", name: "raw-captures", path: "/home/dev/workstation/raw-captures",
+          kind: "dir", allocGiB: 7.9, appGiB: 7.8, files: 480, dirs: 18,
+          mtime: "2026-10-18 19:00", status: "OK", special: "Contenuti utente (mai marcati come cache)",
+          delta: "-0,60 GiB", deltaType: "down", recPot: "0 GiB", recVer: "0 GiB",
+          children: []
+        },
+        {
+          id: " tail-bucket", name: "Altri 4.104 elementi minori (<0,5%)", path: "/home/dev/workstation/[coda-aggregata]",
+          kind: "bucket", allocGiB: 0.5, appGiB: 0.45, files: 4104, dirs: 205,
+          mtime: "Vari", status: "Aggregato per evitare clutter visivo", special: "Seleziona per filtrare la lista",
+          delta: "+0,00 GiB", deltaType: "none", recPot: "0 GiB", recVer: "0 GiB",
+          children: []
+        },
+        {
+          id: "restricted", name: "vault-root-only", path: "/home/dev/workstation/vault-root-only",
+          kind: "error", allocGiB: 0.08, appGiB: 0.0, files: 0, dirs: 1,
+          mtime: "N/D", status: "EACCES (Permesso negato — non è una dir vuota!)", special: "Escluso dal confronto automatico",
+          delta: "Non confrontabile", deltaType: "warn", recPot: "Sconosciuto", recVer: "0 GiB",
+          children: []
+        }
+      ]
+    };
+
+    const HISTORY_ROWS = [
+      { path: "projects/diskGarden/target/debug", kind: "Cresciuto (Directory)", t0: "4,40 GiB", t1: "8,20 GiB", delta: "+3,80 GiB", pill: "up", note: "Aggregato netto sottoalbero (zero doppi conteggi)" },
+      { path: ".cache/pip-wheels-archive.tar", kind: "Aggiunto (Nuovo file)", t0: "—", t1: "2,10 GiB", delta: "+2,10 GiB", pill: "up", note: "Verificato (st_dev=2050)" },
+      { path: "projects/linux-kernel-tree", kind: "Cresciuto (Directory)", t0: "8,50 GiB", t1: "9,60 GiB", delta: "+1,10 GiB", pill: "up", note: "142 file aggiunti, 12 cresciuti" },
+      { path: "vms/debian-test.qcow2", kind: "Cresciuto (File sparse)", t0: "10,80 GiB", t1: "11,20 GiB", delta: "+0,40 GiB", pill: "up", note: "Apparente 18,0 GiB invariata; blocchi allocati +0,40 GiB" },
+      { path: "projects/synthetic-bench.tar.zst", kind: "Metadati aggiornati (Stessa dim.)", t0: "4,60 GiB", t1: "4,60 GiB", delta: "0 B", pill: "warn", note: "mtime cambiato, dimensione identica (non contato come crescita)" },
+      { path: "raw-captures/take-01.mov", kind: "Rimosso", t0: "0,60 GiB", t1: "—", delta: "-0,60 GiB", pill: "down", note: "Spazio liberato" },
+      { path: "vault-root-only", kind: "Non confrontabile", t0: "PermissionDenied", t1: "PermissionDenied", delta: "N/D", pill: "warn", note: "Accesso negato in T0 e/o T1" }
+    ];
+
+    const RECOVER_ROWS = [
+      { path: "projects/diskGarden/target/debug", rule: "Build Artifacts (Cargo target/)", occ: "8,20 GiB", pot: "8,20 GiB", ver: "8,20 GiB", note: "Tutti gli inode appartengono esclusivamente a questo sottoalbero" },
+      { path: ".cache", rule: "XDG User Cache (~/.cache)", occ: "6,40 GiB", pot: "6,40 GiB", ver: "3,20 GiB", note: "3,20 GiB hanno st_nlink=2 con link in /home/dev/workstation/backups" },
+      { path: "vms/debian-test.qcow2", rule: "File Singolo Grande (Disco VM)", occ: "11,20 GiB (18 GiB app.)", pot: "0 GiB (Dati utente)", ver: "0 GiB", note: "Non classificato come cache; file sparse" },
+      { path: "vault-root-only", rule: "Sottoalbero Incompleto", occ: "Sconosciuto", pot: "Sconosciuto", ver: "0 GiB", note: "EACCES: impossibile verificare il recupero" }
+    ];
+
+    let currentNode = TREE;
+    let selectedItem = TREE.children[0];
+    let useApparent = false;
+    let vizType = "treemap";
+
+    function valOf(item) {
+      return Math.max(0.15, useApparent ? item.appGiB : item.allocGiB);
+    }
+
+    function setMode(mode) {
+      ["explore", "history", "recover"].forEach(m => {
+        document.getElementById("view-" + m).classList.toggle("hidden", m !== mode);
+        document.getElementById("tab-" + m).classList.toggle("active", m === mode);
+      });
+    }
+
+    function toggleTheme() {
+      const root = document.documentElement;
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      renderViz();
+    }
+
+    function toggleMetric() {
+      useApparent = !useApparent;
+      document.getElementById("btn-metric").textContent = useApparent
+        ? "Metrica: Apparente (Logica)"
+        : "Metrica: Allocata (Blocchi)";
+      renderAll();
+    }
+
+    function setVizType(type) {
+      vizType = type;
+      document.getElementById("viz-btn-treemap").classList.toggle("btn-primary", type === "treemap");
+      document.getElementById("viz-btn-sunburst").classList.toggle("btn-primary", type === "sunburst");
+      renderViz();
+    }
+
+    // Simple binary/slice-and-dice squarified layout for prototype verification
+    function layoutRects(items, x, y, w, h) {
+      if (!items.length) return [];
+      if (items.length === 1) return [{ item: items[0], x, y, w, h }];
+      const total = items.reduce((s, it) => s + valOf(it), 0);
+      let acc = 0, splitIdx = 0;
+      for (let i = 0; i < items.length; i++) {
+        acc += valOf(items[i]);
+        if (acc >= total / 2 || i === items.length - 2) { splitIdx = i + 1; break; }
+      }
+      const left = items.slice(0, splitIdx);
+      const right = items.slice(splitIdx);
+      const ratio = left.reduce((s, it) => s + valOf(it), 0) / total;
+      if (w >= h) {
+        const lw = Math.round(w * ratio);
+        return [...layoutRects(left, x, y, lw - 3, h), ...layoutRects(right, x + lw + 3, y, w - lw - 3, h)];
+      } else {
+        const lh = Math.round(h * ratio);
+        return [...layoutRects(left, x, y, w, lh - 3), ...layoutRects(right, x, y + lh + 3, w, h - lh - 3)];
+      }
+    }
+
+    function renderViz() {
+      const stage = document.getElementById("treemap-stage");
+      stage.innerHTML = "";
+      const rect = stage.getBoundingClientRect();
+      const W = rect.width || 760;
+      const H = rect.height || 310;
+      const items = currentNode.children || [];
+
+      if (vizType === "treemap") {
+        const boxes = layoutRects(items, 0, 0, W, H);
+        boxes.forEach(({ item, x, y, w, h }) => {
+          const div = document.createElement("div");
+          div.className = `tm-node type-${item.kind}` + (selectedItem && selectedItem.id === item.id ? " selected" : "");
+          div.style.left = x + "px";
+          div.style.top = y + "px";
+          div.style.width = Math.max(24, w) + "px";
+          div.style.height = Math.max(24, h) + "px";
+          const pillClass = item.deltaType === "up" ? "delta-up" : item.deltaType === "down" ? "delta-down" : "delta-warn";
+          div.innerHTML = `
+            <div class="tm-title">${item.name}</div>
+            <div class="tm-meta">
+              <span>${(useApparent ? item.appGiB : item.allocGiB).toFixed(2)} GiB</span>
+              ${item.deltaType !== "none" ? `<span class="delta-pill ${pillClass}">${item.delta}</span>` : ""}
+            </div>
+          `;
+          div.onclick = () => selectItem(item);
+          div.ondblclick = () => { if (item.children && item.children.length) { currentNode = item; selectedItem = item.children[0]; renderAll(); } };
+          stage.appendChild(div);
+        });
+      } else {
+        // Radial / Sunburst comparison view demonstrating angular cramping & unused corners
+        const cx = W / 2, cy = H / 2, rInner = 46, rOuter = Math.min(W, H) / 2 - 14;
+        const total = items.reduce((s, it) => s + valOf(it), 0);
+        let angle = -Math.PI / 2;
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("width", W);
+        svg.setAttribute("height", H);
+        items.forEach(item => {
+          const sweep = (valOf(item) / total) * Math.PI * 2;
+          const a1 = angle, a2 = angle + sweep;
+          angle = a2;
+          const x1 = cx + rOuter * Math.cos(a1), y1 = cy + rOuter * Math.sin(a1);
+          const x2 = cx + rOuter * Math.cos(a2), y2 = cy + rOuter * Math.sin(a2);
+          const x3 = cx + rInner * Math.cos(a2), y3 = cy + rInner * Math.sin(a2);
+          const x4 = cx + rInner * Math.cos(a1), y4 = cy + rInner * Math.sin(a1);
+          const large = sweep > Math.PI ? 1 : 0;
+          const path = document.createElementNS(svgNS, "path");
+          path.setAttribute("d", `M ${x1} ${y1} A ${rOuter} ${rOuter} 0 ${large} 1 ${x2} ${y2} L ${x3} ${y3} A ${rInner} ${rInner} 0 ${large} 0 ${x4} ${y4} Z`);
+          path.setAttribute("fill", item.kind === "cache" ? "#f59e0b55" : item.kind === "error" ? "#fb718555" : "#2dd4bf44");
+          path.setAttribute("stroke", "#2dd4bf");
+          path.style.cursor = "pointer";
+          path.onclick = () => selectItem(item);
+          svg.appendChild(path);
+        });
+        const note = document.createElement("div");
+        note.style.position = "absolute";
+        note.style.right = "12px";
+        note.style.bottom = "10px";
+        note.style.fontSize = "11.5px";
+        note.style.color = "var(--text-secondary)";
+        note.innerHTML = "Nota prototipo: nella vista radiale gli angoli del rettangolo restano inutilizzati (~32% area persa) e gli archi minori (<2°) non possono ospitare etichette né delta.";
+        stage.appendChild(svg);
+        stage.appendChild(note);
+      }
+    }
+
+    function selectItem(item) {
+      selectedItem = item;
+      document.getElementById("insp-kind").textContent = item.kind.toUpperCase();
+      document.getElementById("insp-name").textContent = item.name;
+      document.getElementById("insp-path").textContent = item.path;
+      document.getElementById("insp-alloc").textContent = item.allocGiB.toFixed(2) + " GiB";
+      document.getElementById("insp-apparent").textContent = item.appGiB.toFixed(2) + " GiB";
+      document.getElementById("insp-status").textContent = item.status;
+      document.getElementById("insp-counts").textContent = `${item.files} file, ${item.dirs} dir`;
+      document.getElementById("insp-mtime").textContent = item.mtime;
+      document.getElementById("insp-special").textContent = item.special;
+      document.getElementById("insp-delta").innerHTML = `<span class="delta-pill">${item.delta}</span>`;
+      document.getElementById("insp-rec-1").textContent = item.allocGiB.toFixed(2) + " GiB";
+      document.getElementById("insp-rec-2").textContent = item.recPot;
+      document.getElementById("insp-rec-3").textContent = item.recVer;
+      renderViz();
+      renderTables();
+    }
+
+    function renderBreadcrumbs() {
+      const bc = document.getElementById("breadcrumbs");
+      bc.innerHTML = "";
+      const rootBtn = document.createElement("button");
+      rootBtn.className = "crumb";
+      rootBtn.textContent = "/home/dev/workstation";
+      rootBtn.onclick = () => { currentNode = TREE; selectedItem = TREE.children[0]; renderAll(); };
+      bc.appendChild(rootBtn);
+      if (currentNode !== TREE) {
+        const sub = document.createElement("button");
+        sub.className = "crumb";
+        sub.textContent = currentNode.name;
+        bc.appendChild(sub);
+      }
+    }
+
+    function renderTables() {
+      const et = document.getElementById("explore-tbody");
+      et.innerHTML = "";
+      (currentNode.children || []).forEach(item => {
+        const tr = document.createElement("tr");
+        if (selectedItem && selectedItem.id === item.id) tr.className = "selected";
+        tr.innerHTML = `
+          <td><strong>${item.name}</strong> <span style="color:var(--text-muted); font-size:11px;">[${item.kind}]</span></td>
+          <td class="mono">${item.allocGiB.toFixed(2)} GiB</td>
+          <td class="mono">${item.appGiB.toFixed(2)} GiB</td>
+          <td class="mono">${item.files} f / ${item.dirs} d</td>
+          <td class="mono">${item.delta}</td>
+          <td>${item.status}</td>
+        `;
+        tr.onclick = () => selectItem(item);
+        et.appendChild(tr);
+      });
+
+      const ht = document.getElementById("history-tbody");
+      ht.innerHTML = "";
+      HISTORY_ROWS.forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${r.path}</td>
+          <td>${r.kind}</td>
+          <td class="mono">${r.t0}</td>
+          <td class="mono">${r.t1}</td>
+          <td><span class="delta-pill delta-${r.pill}">${r.delta}</span></td>
+          <td>${r.note}</td>
+        `;
+        ht.appendChild(tr);
+      });
+
+      const rt = document.getElementById("recover-tbody");
+      rt.innerHTML = "";
+      RECOVER_ROWS.forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${r.path}</td>
+          <td>${r.rule}</td>
+          <td class="mono">${r.occ}</td>
+          <td class="mono">${r.pot}</td>
+          <td class="mono"><strong>${r.ver}</strong></td>
+          <td>${r.note}</td>
+        `;
+        rt.appendChild(tr);
+      });
+    }
+
+    function copyPath() {
+      if (navigator.clipboard && selectedItem) {
+        navigator.clipboard.writeText(selectedItem.path);
+      }
+    }
+
+    function renderAll() {
+      renderBreadcrumbs();
+      renderViz();
+      renderTables();
+    }
+
+    window.addEventListener("resize", renderViz);
+    renderAll();
+  </script>
+</body>
+</html>

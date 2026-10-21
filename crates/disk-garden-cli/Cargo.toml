@@ -1,0 +1,15 @@
+[package]
+name = "disk-garden-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line runner and verification tool for DiskGarden Core"
+
+[[bin]]
+name = "disk-garden-cli"
+path = "src/main.rs"
+
+[dependencies]
+disk-garden-core = { path = "../disk-garden-core" }
+serde.workspace = true
+serde_json.workspace = true
