@@ -660,6 +660,9 @@
       <button class="btn" id="btn-quick-save-snap" onclick="quickSaveSnapshotFromHeader()" title="Salva la scansione corrente come snapshot SQLite per il confronto nel tempo">
         💾 Salva Snapshot
       </button>
+      <button class="btn" onclick="exportCurrentReportJson()" title="Esporta il report sintetico della scansione corrente in formato JSON">
+        ⬇ JSON
+      </button>
       <button class="btn" id="btn-metric" onclick="toggleSizeMetric()" title="Commuta tra spazio fisico allocato (st_blocks) e spazio logico apparente (st_size)">
         Metrica: Allocata
       </button>
@@ -2455,6 +2458,23 @@
       renderVisualization();
     }
 
+    async function exportCurrentReportJson() {
+      try {
+        const data = await apiGet("/api/export/scan");
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `diskgarden-report-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert("Impossibile esportare il report JSON: " + e.message);
+      }
+    }
+
     function escapeHtml(str) {
       if (!str) return "";
       return String(str)
@@ -2466,10 +2486,25 @@
 
     window.addEventListener("resize", () => renderVisualization());
     window.addEventListener("keydown", (ev) => {
-      if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT")) return;
-      if (ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowUp")) {
+      if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT")) {
+        if (ev.key === "Escape") {
+          ev.target.blur();
+          closeDirBrowserModal();
+        }
+        return;
+      }
+      if (ev.key === "Escape") {
+        closeDirBrowserModal();
+      } else if (ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowUp")) {
         ev.preventDefault();
         navigateUp();
+      } else if (ev.key === "Enter" && appState.selectedDetail && appState.selectedDetail.summary.entry_type === "directory") {
+        ev.preventDefault();
+        enterSelectedDirectory();
+      } else if (ev.key === "/") {
+        ev.preventDefault();
+        const searchEl = document.getElementById("search-input");
+        if (searchEl) searchEl.focus();
       }
     });
 

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DiskGarden
+GenericName=Analizzatore Spazio Disco
+Comment=Esplora, confronta nel tempo e recupera spazio su disco su Linux
+Exec=disk-garden %F
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Filesystem;Utility;
+Keywords=disk;usage;space;treemap;snapshot;history;cleaner;
+StartupNotify=true

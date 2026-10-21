@@ -648,6 +648,34 @@ fn handle_connection(mut stream: TcpStream, state: &AppState) -> std::io::Result
             let stats = extension_distribution(&scan);
             write_json(&mut stream, 200, &stats)
         }
+        ("GET", "/api/export/scan") => {
+            let Some(scan) = state.current_scan() else {
+                return write_json(
+                    &mut stream,
+                    404,
+                    &serde_json::json!({ "error": "Nessuna scansione disponibile da esportare." }),
+                );
+            };
+            let ov = ScanOverview::from_result(&scan);
+            let top_d: Vec<_> = top_directories(&scan, 50, SizeMetric::Allocated)
+                .into_iter()
+                .map(EntrySummary::from_node)
+                .collect();
+            let top_f: Vec<_> = top_files(&scan, 50, SizeMetric::Allocated, false)
+                .into_iter()
+                .map(EntrySummary::from_node)
+                .collect();
+            let recover = build_recover_report(&scan, 30, SizeMetric::Allocated);
+            let export = serde_json::json!({
+                "product": "DiskGarden",
+                "version": env!("CARGO_PKG_VERSION"),
+                "overview": ov,
+                "top_directories": top_d,
+                "top_files": top_f,
+                "recover_report": recover,
+            });
+            write_json(&mut stream, 200, &export)
+        }
         ("GET", "/api/fs/list-dirs") => {
             let requested = query
                 .get("path")

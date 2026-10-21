@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pietrolama.DiskGarden</id>
+  <name>DiskGarden</name>
+  <summary>Analisi spaziale, memoria temporale e recupero consapevole dello spazio su disco per Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      DiskGarden è un'applicazione desktop Linux open-source per esplorare, comprendere e monitorare nel tempo l'utilizzo dello spazio su disco attraverso tre modalità integrate: Explore, History e Recover.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.pietrolama.DiskGarden.desktop</launchable>
+  <url type="homepage">https://github.com/pietrolama/diskgarden</url>
+  <releases>
+    <release version="0.1.0-alpha.1" date="2026-10-21"/>
+  </releases>
+</component>
